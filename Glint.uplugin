@@ -1,0 +1,27 @@
+{
+    "FileVersion": 3,
+    "Version": 4,
+    "VersionName": "0.1.3 - Edge Sampling Fix 03",
+    "FriendlyName": "Glint",
+    "Description": "Automatic HDR-driven lens flares and authored optical flare assets for Unreal Engine 5.8.",
+    "Category": "Rendering",
+    "CreatedBy": "Mippi the Dork",
+    "CanContainContent": true,
+    "IsBetaVersion": true,
+    "Installed": false,
+    "SupportedTargetPlatforms": [
+        "Win64"
+    ],
+    "Modules": [
+        {
+            "Name": "Glint",
+            "Type": "Runtime",
+            "LoadingPhase": "PostConfigInit"
+        },
+        {
+            "Name": "GlintEditor",
+            "Type": "Editor",
+            "LoadingPhase": "Default"
+        }
+    ]
+}

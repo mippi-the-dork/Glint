@@ -1,0 +1,141 @@
+// Glint v0.1: initial image-driven HDR field renderer. No engine shader source copied.
+// Coordinates are source-viewport-relative; all resources remain inside RDG.
+#include "/Engine/Private/Common.ush"
+
+Texture2D<float4> HDRScene;
+RWTexture2D<float4> BrightOutput;
+RWTexture2D<float4> GhostOutput;
+RWTexture2D<float4> SceneOutput;
+Texture2D<float4> BrightTexture;
+Texture2D<float4> FlareTexture;
+int2 SourceMin;
+int2 SourceSize;
+int2 BrightSize;
+int2 FullSize;
+float BrightThreshold;
+float KneeWidth;
+float GhostStrength;
+float StreakStrength;
+float ChromaticShift;
+float GhostSpacing;
+float FlareIntensity;
+uint DebugBrightPass;
+
+float GlintLum(float3 c) { return dot(max(c, 0.0), float3(0.2126, 0.7152, 0.0722)); }
+// Out-of-frame flare samples must be black, NOT clamped to the nearest border
+// texel. Clamping duplicates a bright edge pixel across many ghost/streak taps,
+// creating horizontal/vertical bars when the source approaches any viewport edge.
+float3 GlintLoadBrightOrBlack(int2 p)
+{
+    if (any(p < int2(0, 0)) || any(p >= BrightSize))
+    {
+        return float3(0.0, 0.0, 0.0);
+    }
+    return BrightTexture.Load(int3(p, 0)).rgb;
+}
+
+// Manual bilinear filter with zero outside the valid image. This preserves a
+// fractional footprint at the image edge instead of either stretching a border
+// texel indefinitely or abruptly dropping a bright subpixel-sized highlight.
+float3 GlintSampleBright(float2 uv)
+{
+    float2 pos = uv * float2(BrightSize) - 0.5;
+    int2 p0 = int2(floor(pos));
+    float2 alpha = frac(pos);
+    float3 a = GlintLoadBrightOrBlack(p0);
+    float3 b = GlintLoadBrightOrBlack(p0 + int2(1, 0));
+    float3 c = GlintLoadBrightOrBlack(p0 + int2(0, 1));
+    float3 d = GlintLoadBrightOrBlack(p0 + int2(1, 1));
+    return lerp(lerp(a, b, alpha.x), lerp(c, d, alpha.x), alpha.y);
+}
+
+[numthreads(8,8,1)]
+void GlintExtractCS(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id.xy >= uint2(BrightSize))) return;
+    int2 base = SourceMin + int2(id.xy) * 4;
+    float3 average = 0.0;
+    float3 highest = 0.0;
+    float peak = -1.0;
+    float validCount = 0.0;
+    const int2 sourceEnd = SourceMin + SourceSize;
+    // Scan only real source pixels, even for an incomplete 4x4 cell on the
+    // right/bottom edge. Never replicate border pixels into the padded area.
+    [unroll] for (int y = 0; y < 4; ++y)
+    [unroll] for (int x = 0; x < 4; ++x)
+    {
+        int2 p = base + int2(x, y);
+        if (all(p < sourceEnd))
+        {
+            float3 color = max(HDRScene.Load(int3(p, 0)).rgb, 0.0);
+            average += color;
+            validCount += 1.0;
+            float lum = GlintLum(color);
+            if (lum > peak) { peak = lum; highest = color; }
+        }
+    }
+    average /= max(validCount, 1.0);
+    float3 mixed = lerp(average, highest, 0.35);
+    float lum = GlintLum(mixed);
+    float knee = max(BrightThreshold * KneeWidth, 0.001);
+    float response = saturate((lum - BrightThreshold + knee) / (2.0 * knee));
+    response = max(lum - BrightThreshold, 0.0) + response * response * knee;
+    BrightOutput[id.xy] = float4(mixed * (response / max(lum, 0.0001)), 1.0);
+}
+
+[numthreads(8,8,1)]
+void GlintGhostCS(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id.xy >= uint2(BrightSize))) return;
+    float2 uv = (float2(id.xy) + 0.5) / float2(BrightSize);
+    float2 dir = uv - 0.5;
+    float3 ghost = 0;
+    [unroll] for (int i = 0; i < 4; ++i)
+    {
+        float scale = (i + 1) * GhostSpacing;
+        float2 sampleUV = 0.5 - dir * scale;
+        float edge = saturate(1.0 - length(dir) * 0.8);
+        float2 ca = float2(ChromaticShift * (i + 1), 0.0);
+        float3 color = float3(
+            GlintSampleBright(sampleUV + ca).r,
+            GlintSampleBright(sampleUV).g,
+            GlintSampleBright(sampleUV - ca).b);
+        ghost += color * edge * (0.20 / (i + 1));
+    }
+    float3 streak = 0;
+    [unroll] for (int s = -5; s <= 5; ++s)
+    {
+        if (s == 0) continue;
+        float2 sampleUV = uv + float2(s * 0.018, 0.0);
+        streak += GlintSampleBright(sampleUV) * (0.04 / (1.0 + abs(s)));
+    }
+    GhostOutput[id.xy] = float4(ghost * GhostStrength + streak * StreakStrength, 1.0);
+}
+
+[numthreads(8,8,1)]
+void GlintCompositeCS(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id.xy >= uint2(FullSize))) return;
+    int2 pixel = int2(id.xy);
+    float4 source = HDRScene.Load(int3(pixel, 0));
+    if (all(pixel >= SourceMin) && all(pixel < SourceMin + SourceSize))
+    {
+        float2 uv = (float2(pixel - SourceMin) + 0.5) / float2(SourceSize);
+        float2 pos = uv * float2(BrightSize) - 0.5;
+        int2 i0 = int2(floor(pos));
+        float2 fracUV = frac(pos);
+        // Composite with transparent black outside the reduced image. Clamping
+        // here would also stretch a bright final flare texel over a screen edge.
+        int2 p00 = i0;
+        int2 p10 = i0 + int2(1, 0);
+        int2 p01 = i0 + int2(0, 1);
+        int2 p11 = i0 + int2(1, 1);
+        float3 a = (all(p00 >= 0) && all(p00 < BrightSize)) ? FlareTexture.Load(int3(p00, 0)).rgb : float3(0,0,0);
+        float3 b = (all(p10 >= 0) && all(p10 < BrightSize)) ? FlareTexture.Load(int3(p10, 0)).rgb : float3(0,0,0);
+        float3 c = (all(p01 >= 0) && all(p01 < BrightSize)) ? FlareTexture.Load(int3(p01, 0)).rgb : float3(0,0,0);
+        float3 d = (all(p11 >= 0) && all(p11 < BrightSize)) ? FlareTexture.Load(int3(p11, 0)).rgb : float3(0,0,0);
+        float3 flare = lerp(lerp(a,b,fracUV.x),lerp(c,d,fracUV.x),fracUV.y);
+        source.rgb = (DebugBrightPass != 0u) ? flare : (source.rgb + flare * FlareIntensity);
+    }
+    SceneOutput[pixel] = source;
+}
