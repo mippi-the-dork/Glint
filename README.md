@@ -1,78 +1,99 @@
+**Glint 0.7.2 / Source Motion Stability + Lens Profile Reset Arrows.** The 0.7.1 working renderer and editor are retained. GPU source tracking now retains the last valid HDR source color and decays confidence through brief detection gaps, with motion-adaptive position smoothing and reset on camera cuts; `Source Persistence` is exposed under Lens Profile > Source Detection (default `0.65`, range `0`–`0.95`). A Glint Lens Details customization adds native per-property reset arrows using the C++ class defaults, so edited settings can be restored without recreating the asset. The source history texture is now `8×2` (positions/confidence and cached HDR color); no CPU readbacks. Added `Glint.Source.Tracking.MotionAndDropoutPersistence` and `Glint.Editor.Lens.PerPropertyResetDefaults` native automation cases (32 tests registered). **UE5.8.3 compilation, shader execution, and UI behavior are pending validation**. See [0.7.2 technical notes](Docs/82-Dev07-02-Motion-Stability-and-Lens-Resets.md).
+
+---
+
+**Glint 0.7.1 / Dev07 test correction.** The user validated 28/29 native automation tests in UE5.8.3. `Glint.Data.Flare.ElementBudget` failed because it authored 30 elements but expected the new 32-element runtime limit. The test now supplies 40 elements, verifies the runtime truncates to 32, preserves the first and last eligible entries, clamps size, and leaves all 40 editable elements in the Flare asset. No runtime/editor rendering code or shaders changed from 0.7.0. The combined 26-element Cinematic screenshot shows visually excessive accumulated effects; source clustering, more discriminating highlight selection and type-specific Cinematic defaults are future work, not included here. Windows test rerun pending.
+
 # Glint — Unreal Engine 5.8 Lens Flares
 
-**Development pass 01 / 0.1.3 (Edge Sampling Fix 03)**. Prototype/source package, **not a finished v1.0 plugin or verified packaged binary**. Unreal 5.8.0–5.8.3, Windows 64-bit is the target; this package has not been built against the user's installed Unreal engine from this environment.
+**Development Pass 07 / Glint 0.7.0 (Editor Refresh + Expanded Optical Library).** Complete Glint source plugin targeting UE5.8.0–5.8.3 Win64. **29 registered tests; Windows compilation and GPU/Slate validation pending**. The user's previous 0.6.1 suite returned 22/23 passed; the single failure was due to an undersized 16-element test fixture, and Dev07 now exercises the actual 32-element cap.
 
-Glint is a standalone UE renderer extension that creates camera-lens artifacts from HDR scene pixels, with dedicated editable **Glint Lens** and **Glint Flare** Content Browser assets. Camera-specific configurations can use Unreal's weighted blendable system. The current rendering pass uses a simple low-resolution automatic image field, **not** the final candidate tracker or authorable element-stack renderer.
+**Dev07 changes:** fixed editor Undo/Redo refresh; 26 source-aware element types (up from 13), Default/Subtle/Cinematic per-type presets, 32-element per-lens and per-view budgets, more type-specific schematic guides, compact Settings gear with configurable schematic opacity, near-black neutral gray canvas, real icon assets in square drag/Solo/Delete controls, insertion-line feedback for reordering, single-closure circles and an editor-only blue source marker instead of an implicit glowing white source. These changes preserve the source-aware renderer, reference-image backdrop, camera binding and Gameplay Camera compatibility of prior passes.
 
-## Install
+**Key documentation:** [Dev07 editor UX](Docs/77-Dev07-Editor-Refresh-and-Preview.md), [new optical types](Docs/78-Dev07-Optical-Library-and-Presets.md), [test and manual QA plan](Docs/79-Dev07-Manual-QA-and-Automation.md), [release notes](Docs/80-Dev07-Release-Notes.md).
 
-1. Unzip the **Glint** folder into `<Project>/Plugins/Glint/`.
-2. Regenerate project files and compile `YourProjectEditor Win64 Development` in UE 5.8.
-3. Enable **Glint** in Edit > Plugins if needed. Restart to allow shader registration.
-4. In Content Browser, right-click and create **Glint > Glint Lens** and, optionally, **Glint > Glint Flare**.
-5. For a level-wide automatic lens in editor and gameplay, place or select an unbound **Post Process Volume**. In **Rendering Features > Post Process Materials > Weighted Blendables**, add the `Glint Lens` asset with weight 1.0.
-6. Alternatively, select a default **Glint Lens** in **Project Settings > Plugins > Glint** for gameplay cameras. For a camera-specific override attach **Glint Camera Binding Component** to a **PlayerController** and choose its lens asset. The `Set Glint Lens` Blueprint function can change the asset/weight during gameplay.
-7. Put a bright emissive mesh in view. Adjust the Lens' **Highlights > Threshold**, **Overview > Intensity**, and **Optics** settings. Glint works independently of Unreal's built-in lens flare toggle and does not require light Actors.
+**Installation:** Replace only `Plugins/Glint`, rebuild against UE5.8.3, then in the Unreal console run `Automation RunTests Glint`. Optional source checks: `python Plugins/Glint/Tools/CheckShaderContracts.py` and `python Plugins/Glint/Tools/CheckDev07Source.py`. Neither static script substitutes for Windows compilation or live GPU validation.
 
-### Runtime commands
+---
+
+**Development Pass 06 / Glint 0.6.1 (Slate Row Build Fix)**. Complete Win64 source plugin for Unreal Engine 5.8.0–5.8.3. The user verified **22/22 Glint 0.5.x native tests passing** and supplied an authored flare screenshot. The ToolMenus editor toolbar integration and 23rd test require a fresh UE5.8.3 build and visual verification.
+
+Glint provides a GPU HDR-driven lens flare renderer plus Glint Lens and Glint Flare assets. The native Flare editor has Schematic, GPU Rendered and Hybrid previews, with editable optical elements. Gameplay Cameras can reach the shared rendered-view integration path, but a dedicated Camera Rig node and automatic rig transition synchronization remain open.
+
+
+
+## 0.6.1 — UE5.8 Slate row syntax correction
+
+- Fixed `C2059` in `GlintFlareEditorToolkit.cpp` at the element-row Delete button: a nested `SBox` / `SButton` / `SImage` Slate declaration had one fewer closing square bracket than opening brackets.
+- Retains the 0.6.0 preview-pane toolbar strip, neutral-grey schematic background, square Solo/Delete controls, drag-over reorder highlighting, circle seam adjustment, and the 24-element per-lens authored budget.
+- Build log confirmed the Glint runtime DLL linked, while GlintEditor stopped at this C++ syntax error.
+- **Validation:** balanced the relevant Slate expression and checked archive integrity; UE5.8.3 compilation and visual/automation tests must still be run locally. No other plugins changed.
+
+## 0.6.0 — Editor polish and authored element budget
+
+- Added Schematic/Rendered/Hybrid/Settings to a dedicated right-pane strip, independent of the top asset toolbar.
+- Changed square icon actions and drag-over row feedback; switched the schematic workspace to neutral greys.
+- Closed schematic circle paths with a small overlap to reduce visible line seams.
+- Raised `FGlintLensBlendData::MaxElementsPerLens` from 12 to 24; `r.Glint.MaxElements` remains capped at 24 per blended view.
+- The existing 13 element types are unchanged; new families remain future work.
+
+## 0.5.3 — UE5.8 toolbar compile correction
+
+- Replaced the 0.5.2 workaround that accessed private `FAssetEditorToolkit::ToolbarWidgetContent` (C2248) with the supported `GenerateCommonActionsToolbar(FToolMenuContext&)` override. This calls the base method to preserve Save/Browse and appends the Glint mode buttons/settings gear as a native `ToolMenus` widget entry in the trailing toolbar section.
+- Eliminated `SWidget`/`SHorizontalBox` mismatched comparisons (C2678) and reworked `Glint.Editor.Toolbar.SameRowAndRegeneration` to validate the actual `UToolMenu` entry and idempotency.
+- Added the editor-only `ToolMenus` module dependency. No renderer, flare elements, shader, or other plugins were changed.
+- **Verification:** this code passed static source/package checks but has not compiled or run inside UE5.8.3 here. The 23rd test must run on your Windows installation; toolbar placement needs a visual check.
+
+## 0.5.2 — Native toolbar visibility correction (superseded by 0.5.3)
+
+- Fixed the missing **Schematic / Rendered / Hybrid / Settings** buttons in the Flare asset editor. UE5.8's default standalone editor toolbar displayed Save/Browse, but Glint's `AddToolbarWidget` controls were missing in the user's 0.5.1 screenshot.
+- An attempt to wrap the native Slate toolbar was introduced here but proved incompatible with UE5.8's private member access; superseded by 0.5.3's ToolMenus extension.
+- Added `Glint.Editor.Toolbar.SameRowAndRegeneration` automated coverage. The suite now contains **23 registered tests**; the previously validated 22 tests are unchanged.
+- Authored elements and shaders were **not modified**. The supplied GIF opened as a single still image in this environment, so we are not claiming validation of animation.
+- Scope: **Glint only**. This package requires UE5.8.3 compilation and visual verification on Windows.
+
+## 0.5.1 — UE5.8 editor compile correction
+
+- Fixed the `GlintFlareEditorToolkit.cpp` include path for Slate drag-and-drop operations: `Framework/DragDropOperation.h` → `Input/DragAndDrop.h`. The existing `DragAndDrop/DecoratedDragDropOp.h` remains.
+- The 0.5 editor features, shader pipeline, and tests are otherwise unchanged. Only Glint is modified.
+- User's UE5.8.3 build log: `Glint` runtime DLL linked; `GlintEditor` compilation stopped on this include. A fresh build must confirm there are no subsequent Glint editor errors. Unrelated project errors are out of scope.
+
+## Install and verify
+
+1. Close Unreal. Replace the entire `<Project>/Plugins/Glint/` folder, not just individual files.
+2. Regenerate project files and build `<Project>Editor` Win64 Development with UE5.8.3.
+3. Launch the editor, open a Glint Flare asset, and run `Automation RunTests Glint`. This branch registers **23 tests** (including the toolbar ToolMenus entry).
+4. Run `python Plugins/Glint/Tools/CheckShaderContracts.py` to independently verify the six compute shader declarations.
+5. Follow [the detailed manual QA checklist](Docs/71-Dev05-Manual-QA-and-Tests.md).
+
+## New in 0.5
+
+- Native toolbar controls for **Schematic / Rendered / Hybrid / Gear**, alongside standard asset actions.
+- **Resizable left outliner + selected-element Details**, right visual workspace. Search, drag/drop reorder grip, per-row Solo (supplied Focus-style icon), visibility and trash; no Up/Down/Remove toolbar buttons.
+- **Right-click and drag** moves the synthetic source, including outside the camera image. Exposure and White/Red/Green/Blue preview-light controls are in the Gear menu.
+- Every element starts with **type-specific placement/scale/appearance** from `UGlintFlare::MakeDefaultElement`, instead of a generic `AxisPosition=-1` template.
+- **Shimmer, Sparkle, Caustic** added for 13 authored element families. Seven type-conditioned shape controls are packed to the source-driven shader and GPU editor preview.
+- **Camera Frame Guide:** the inner image is visually distinct from the larger offscreen authoring workspace; elements beyond the camera frame remain editable. Extremely distant handles are represented at the workspace boundary.
+- **Reference screenshot texture:** Gear > Camera background (Texture2D). Import a screenshot as a Texture2D asset, select it, and Glint places it underneath its transparent GPU flare in Rendered/Hybrid. The inner frame follows the reference texture's aspect ratio, and the choice is persisted **per Flare in editor preferences**, not inside the cooked Flare asset.
+
+**Important limitation:** The selected reference texture is currently a visual backdrop. It does not yet feed Glint automatic source detection, because a screenshot usually lacks the HDR/exposure information used by the runtime. The editor's synthetic light remains movable separately from the texture.
+
+## Testing quick start
+
+In an unbound Post Process Volume, assign a Glint Lens to Weighted Blendables and give it a Detailed Flare. Use colored emissive spheres, with console commands:
 
 ```text
-r.Glint.Enabled 1
-r.Glint.Enabled 0
-r.Glint.DebugBrightPass 1
-r.Glint.DebugBrightPass 0
 Automation RunTests Glint
+r.Glint.Enabled 1
+r.Glint.Automatic 0
+r.Glint.Authored 1
+r.Glint.SourceTracking 1
+r.Glint.DebugSources 1
+r.Glint.DebugSources 0
 ```
 
-## Current implementation
+For the editor, verify all three modes, element defaults, shape Details, drag/drop reorder + Undo/Redo, Solo, reference image selection/clearing and restoration, and source motion beyond each frame edge. Test both portrait and wide textures.
 
-- UE5.8 per-view HDR hook: `ISceneViewExtension::EPostProcessingPass::MotionBlur`, after scene motion-blur stage and before the `BeforeBloom` material location.
-- Three RDG global compute shader dispatches: peak-preserving 4×4 HDR bright extraction, image-based ghosts and horizontal streaks at quarter resolution, then HDR compositing.
-- No CPU readback or per-highlight Actor allocation; no GPU work if a view has no Glint Lens blendable.
-- Native `UGlintLensProfile` asset implements `IBlendableInterface`. Per-view lens data transferred into `FBlendableManager` as POD; renderer never touches a UObject.
-- Native `UGlintFlare` asset with initial element definition schema. Element composition is **data-only in this pass**, not yet rendered.
-- Camera and Post Process Volume blendables; project default lens and player-controller camera bindings intended to work with traditional and Gameplay Cameras when their final view is supplied by PlayerController.
-- Native automation tests of asset state and controller binding. GPU visual behavior and shipping builds **are unverified**.
+## Validation and boundaries
 
-## Important limitations of the first pass
-
-- **Gameplay Cameras:** Final view integration is available via a PlayerController camera binding. Native `Glint Lens Camera Node` asset-graph authoring and automatic camera-rig transition blending are **not yet implemented**. `FPostProcessUtils::BlendPostProcessSettings` does not blend custom weighted blendable objects, so an ordinary post-process node in a Camera Rig is **not sufficient** for seamless rig-to-rig lens transitions.
-- **Highlight response:** Threshold currently operates on the stored pre-exposed HDR scene image. Physical exposure normalization and time-consistent source classification are next technical gates.
-- **No bounded full-detail candidates:** The renderer is image-driven only in this pass. The top-K automatic candidate tracker, authored source rendering, multi-element compositing, occlusion, camera-aware diffraction, optical LUTs, and caching remain roadmap items.
-- **Rendering features:** TSR, multiview/split-screen, stereo, SceneCapture, unusual HDR modes, resolution changes, packaged Win64 and render target override paths require manual validation. The first renderer uses a full-resolution HDR compute composite, which should be profiled before shipping.
-- **Cooked default lens:** A soft reference in Project Settings may require explicit cooking / Asset Manager inclusion of the referenced asset; a Post Process Volume or hard-referenced camera component is safer for the first test.
-- **Legacy Unreal lens flare:** Disable its intensity if you do not want both effects to appear simultaneously.
-
-## Documentation
-
-See [`Docs/README.md`](Docs/README.md) for the existing multi-chapter planning/research library and first source audit + test notes. The original research material has been retained; it describes intended v1.0 scope, **not what is already implemented**.
-
-## Source policy
-
-This archive contains original Glint plugin code, the plugin's own shader and documentation. It does not redistribute the Epic Games Unreal Engine source files supplied for research.
-
-## Build Fix 01 (November 13, 2026)
-
-- Fixed UE5.8 compilation failure in `GlintSceneViewExtension.h`: complete `UGlintLensProfile` definition is now included before `TStrongObjectPtr<UGlintLensProfile>` is instantiated.
-- Updated `GlintModule.cpp` to use `FCoreDelegates::GetOnPostEngineInit()` for registration and removal, eliminating the two Glint-specific deprecation warnings.
-- No changes to other plugins, Unreal Engine source, rendering algorithms, shaders, or runtime behavior are intended.
-- This patch was inspected and statically validated here; **it has not been compiled against the Windows UE5.8 installation**.
-
-The project-wide build may still fail due to other plugins. To validate Glint on its own, build Glint in a clean UE5.8 project with no unrelated project plugins enabled, then run `Automation RunTests Glint`.
-
-## Shader Fix 02 (November 13, 2026)
-
-- Fixed an editor startup fatal error in UE5.8 shader compilation for `FGlintCompositeCS` (`Glint.usf:13`, `BrightSize could not be bound`).
-- `GlintCompositeCS` uses the shared HLSL global `int2 BrightSize` for quarter-resolution flare sampling. `FGlintCompositeCS::FParameters` now declares `SHADER_PARAMETER(FIntPoint, BrightSize)` and the RDG pass populates it from `SmallSize`.
-- Checked each of the three Glint shader entry points against the C++ parameter structures for this class of mismatch; the other two already declare their required inputs.
-- The shader file itself, rendering behavior, and unrelated Unreal plugins were not changed.
-- Start the editor with the replacement plugin in place so Unreal can recompile the changed global shader metadata. Retry on the **unchanged** package won't help. It isn't necessary to clear Derived Data Cache to apply this fix.
-- Static verification performed; actual shader compilation and runtime execution require testing in UE5.8 on Windows.
-
-## Edge Sampling Fix 03 (November 13, 2026)
-
-- Corrected all-edge stretching observed during actual UE5.8.3 viewport testing. Root cause: the automatic ghost/streak shader clamped out-of-bounds UV coordinates to the last bright texel, repeatedly sampling a bright edge pixel and drawing elongated bars.
-- Replaced clamped sampling in `GlintSampleBright` with a zero-outside-image, bilinear-filtered texture lookup. The same helper serves ghost, chromatic and streak taps, so all boundaries receive the fix. The final composite also uses zero-valued texture taps instead of clamping its bilinear neighbors at the viewport edge.
-- Removed border replication when the 4x4 HDR extraction cell extends beyond an odd-sized view. Only valid pixels contribute to each partial cell.
-- No shader parameter layout or C++ render-pass changes. This avoids introducing a new global-shader binding mismatch. The existing three automated tests passed in the user's UE5.8.3 installation on 0.1.2; the new shader behavior still requires runtime visual validation.
-- Run `Automation RunTests Glint` and sweep the sun or a bright emissive object across all four sides and the four corners. The intended streaks should remain finite; there should be no stretched edge rows, columns, or smear after the source exits the screen. See `Docs/50-Edge-Sampling-Regression-and-QA.md`.
+Previous 0.4.0 passed 16 UE automation tests; the user verified all 22 Glint 0.5.x tests before the new toolbar test was added. This branch registers 23 tests, and 0.6.1 has not been compiled or GPU-tested in UE5.8.3 here; the user's prior build log confirmed only the runtime module linked. No Unreal Engine modifications. Only Glint code and assets are in the archive. The README and [full documentation index](Docs/README.md) contain technical and design references.

@@ -5,6 +5,6 @@ public class GlintEditor : ModuleRules
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         CppStandard = CppStandardVersion.Cpp20;
-        PrivateDependencyModuleNames.AddRange(new [] { "Core", "CoreUObject", "Engine", "Glint", "UnrealEd", "AssetTools", "Slate", "SlateCore" });
+        PrivateDependencyModuleNames.AddRange(new [] { "Core", "CoreUObject", "Engine", "Glint", "UnrealEd", "AssetTools", "Slate", "SlateCore", "PropertyEditor", "EditorFramework", "InputCore", "Projects", "RenderCore", "AssetRegistry" });
     }
 }

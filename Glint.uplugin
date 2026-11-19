@@ -1,7 +1,7 @@
 {
     "FileVersion": 3,
-    "Version": 4,
-    "VersionName": "0.1.3 - Edge Sampling Fix 03",
+    "Version": 16,
+    "VersionName": "0.7.2 - Motion Source Stability and Lens Default Reset",
     "FriendlyName": "Glint",
     "Description": "Automatic HDR-driven lens flares and authored optical flare assets for Unreal Engine 5.8.",
     "Category": "Rendering",

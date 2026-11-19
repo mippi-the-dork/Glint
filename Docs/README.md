@@ -1,9 +1,13 @@
-> **Implementation status:** Development Pass 01 source is now included in the plugin. The 46 original planning/research documents describe target v1.0 behavior, not the feature completeness of this build. See [Dev 01 build and QA](47-Dev01-Validation-and-Manual-QA.md), [source audit](46-UE58-Source-Audit.md), [Gameplay Cameras plan](48-Gameplay-Cameras-Integration.md) and [renderer next pass](49-Renderer-Budget-and-Next-Pass.md).
+> **Current source handoff:** [Glint 0.7.0 — Dev07 expanded authoring and editor fixes](80-Dev07-Release-Notes.md) lists this source candidate, known validation limits, and the 29-test suite. See [editor preview details](77-Dev07-Editor-Refresh-and-Preview.md), [optical library](78-Dev07-Optical-Library-and-Presets.md), and [QA checklist](79-Dev07-Manual-QA-and-Automation.md). The older v1 research chapters remain design targets, not declarations of complete features.
+
+> **Current source handoff:** [Glint 0.6.1 — Slate row build fix](76-Dev06-Slate-Row-BuildFix.md) documents the most recent Glint-only compile correction, the 0.6 UI changes and the Windows validation still required. The older research chapters remain v1 product targets, not claims of implemented functionality.
+
+> **Implementation status:** Development Pass 03 source is now included in the plugin. The 46 original planning/research documents describe target v1.0 behavior, not the feature completeness of this build. See [Dev 01 build and QA](47-Dev01-Validation-and-Manual-QA.md), [source audit](46-UE58-Source-Audit.md), [Gameplay Cameras plan](48-Gameplay-Cameras-Integration.md) and [renderer next pass](49-Renderer-Budget-and-Next-Pass.md).
 
 # Glint — v1.0 Planning Documentation
 
 > **Product name:** Glint (confirmed)  
-> **Status:** Research and expanded v1.0 design specification; **implementation not started**  
+> **Status:** Research specification plus Dev03 implementation; **v1.0 feature set is not complete**  
 > **Updated:** 2026-11-12 (Froyok and five user-supplied lens flare research references audited)  
 > **Target:** Unreal Engine 5.8.0–5.8.3, Win64 deferred renderer, packaged runtime and native Slate/editor authoring  
 > **North star:** **The lens reacts to the scene automatically**, and creators can also hand-author any flare with Optical Flares-like detail.
@@ -115,3 +119,60 @@ The renderer should *fake costly optical detail when visually equivalent*: share
 The research in [34](34-Other-Engines-Real-Time-Lens-Flares.md)–[37](37-Cross-Engine-Findings-and-Prototype-Gates.md) adds the generic Repeater authoring modifier, screen-edge deformation, source occlusion response research, brightness-pyramid optimization feasibility, stock UE double-flare diagnostics, source-peak preservation, optical simplification options and more precise benchmark gates. They **do not** change the core camera-first requirement or defer automatic image-based flares.
 
 - [50 — Edge Sampling Regression and QA](50-Edge-Sampling-Regression-and-QA.md) — real UE5.8.3 observed boundary stretching, root cause, shader-only fix, and manual acceptance tests.
+
+## Dev02 implementation and validation additions (November 14, 2026)
+
+- [51 — Dev02 Automatic + Authored Runtime](51-Dev02-Automatic-and-Authored-Runtime.md)
+- [52 — Dev02 Camera Transitions](52-Dev02-Camera-Transitions.md)
+- [53 — Dev02 Shader Contracts](53-Dev02-Shader-Contracts.md)
+- [54 — Dev02 Visual and Performance QA](54-Dev02-Visual-Performance-QA.md)
+
+## Dev03 implementation additions (November 15, 2026)
+
+- [55 — Dev03 GPU Source Selection](55-Dev03-GPU-Source-Selection.md)
+- [56 — Dev03 Native Flare Editor](56-Dev03-Native-Flare-Editor.md)
+- [57 — Dev03 Physical Cameras and Gameplay Cameras](57-Dev03-Physical-Cameras-and-Gameplay-Cameras.md)
+- [58 — Dev03 Visual QA and Performance](58-Dev03-Visual-QA-and-Performance.md)
+- [59 — Dev03 Contracts Release Gates](59-Dev03-Contracts-Release-Gates.md)
+- [60 — Dev03 Release Notes](60-Dev03-Release-Notes.md)
+
+## Development Pass 04 — Three-mode editor and source refinement
+
+- [61 — Schematic, Rendered & Hybrid GPU editor](61-Dev04-Three-Mode-GPU-Editor.md)
+- [62 — Element identification and editor UX](62-Dev04-Element-Identification-and-UX.md)
+- [63 — Optics additions and source-edge behavior](63-Dev04-Optical-Extensions-and-Source-Behavior.md)
+- [64 — Engine integration and shader contracts](64-Dev04-Engine-Integration-and-Shader-Contracts.md)
+- [65 — Manual QA and performance](65-Dev04-Manual-QA-and-Performance.md)
+- [66 — Development release notes](66-Dev04-Release-Notes.md)
+
+## Development Pass 05 — Artist Defaults, Camera Guide and Reference Texture
+
+- [67 — Dev05 Artist First Element Defaults](67-Dev05-Artist-First-Element-Defaults.md)
+- [68 — Dev05 Outliner Toolbar and Interaction](68-Dev05-Outliner-Toolbar-and-Interaction.md)
+- [69 — Dev05 Camera Frame and Offscreen Workspace](69-Dev05-Camera-Frame-and-Offscreen-Workspace.md)
+- [70 — Dev05 Reference Texture Preview](70-Dev05-Reference-Texture-Preview.md)
+- [71 — Dev05 Manual QA and Tests](71-Dev05-Manual-QA-and-Tests.md)
+- [72 — Dev05 Release Notes](72-Dev05-Release-Notes.md)
+
+## Glint 0.5.1 — UE5.8 editor build correction
+
+- [73 — Build Fix 01: Drag-and-drop header](73-Dev05-BuildFix01-UE58-DragDrop.md) — UE5.8.3 `C1083` resolution, scope, and validation status.
+
+## Glint 0.5.2 — Native Flare Editor Toolbar
+
+- [74 — Native toolbar visibility and same-row layout](74-Dev05-BuildFix02-Native-Toolbar.md) — Restores missing preview buttons and gear on the far right of the existing Save/Browse toolbar; documents regression test and Windows QA.
+
+## Glint 0.5.3 — ToolMenus toolbar compile correction
+
+- [75 — ToolMenus Toolbar Fix](75-Dev05-BuildFix03-ToolMenus-Toolbar.md) — UE5.8 C2248/C2678 fix, editor-only API extension and tests.
+
+## Dev07 additions (source candidate)
+
+| Document | Purpose |
+|---|---|
+| [77 — Editor refresh and preview](77-Dev07-Editor-Refresh-and-Preview.md) | Undo/Redo notifications, compact gear, lower-opacity schematic, editor icon handling |
+| [78 — Optical library and presets](78-Dev07-Optical-Library-and-Presets.md) | Thirteen additional types, source-aware shader shapes, Default/Subtle/Cinematic presets, budgets |
+| [79 — Manual QA and automated tests](79-Dev07-Manual-QA-and-Automation.md) | 29-test command and focused visual/undo/performance checks |
+| [80 — Dev07 source release notes](80-Dev07-Release-Notes.md) | Implemented changes, static checks, and remaining Windows validation |
+
+- [Glint 0.7.1 — Automation budget fixture correction](81-Dev07-01-Automation-Budget-Correction.md)
