@@ -1,3 +1,15 @@
+# Glint 0.8.0 — Dev08 Source Grouping, Optical Quality and Editor Fixes
+
+**Previous validated version:** the user ran **32/32 native Glint tests successfully on 0.7.2**, and camera-motion flare dropout improved. **New version:** 35 registered Glint automation tests; Windows build, live GPU behavior and visual UI validation pending.
+
+**Glint-only changes:** Fix Solo/Trash icon resource paths; attach Lens reset arrows to the existing Details rows; add Lens `Source Grouping Radius` (default `0.125`) to suppress multiple tile maxima from a single broad highlight; add `Authored Energy Limit` (default 6, zero disables) to smoothly control overexposed authored stacks without changing automatic ghosts; early out of source element GPU evaluation when safely outside the element's analytic bounds; more natural ring intensity and dust layout; and type-specific Cinematic creation presets for all 26 optical types (existing assets unchanged).
+
+**Install:** Replace `<Project>/Plugins/Glint` only, rebuild `ProjectHeavyWaterEditor` Win64 Development against UE5.8.3, then run `Automation RunTests Glint`. To check shader parameter contracts, use `python Plugins/Glint/Tools/CheckShaderContracts.py`. Compare a detailed 26-element flare with Source Grouping Radius `0` vs `0.125`, and Authored Energy Limit `0` vs `6`; test colored emissive spheres, camera movement, the Solo/Delete icons and per-property reset arrows.
+
+**Documents:** [Dev08 release/QA notes](Docs/86-Dev08-Release-Notes-and-QA.md), [source grouping and energy](Docs/83-Dev08-Source-Grouping-and-HDR-Energy.md), [editor corrections](Docs/84-Dev08-Editor-Brushes-and-Reset-Arrows.md), [optical presets/performance](Docs/85-Dev08-Optical-Presets-and-Performance.md), and the [complete documentation index](Docs/README.md).
+
+---
+
 **Glint 0.7.2 / Source Motion Stability + Lens Profile Reset Arrows.** The 0.7.1 working renderer and editor are retained. GPU source tracking now retains the last valid HDR source color and decays confidence through brief detection gaps, with motion-adaptive position smoothing and reset on camera cuts; `Source Persistence` is exposed under Lens Profile > Source Detection (default `0.65`, range `0`–`0.95`). A Glint Lens Details customization adds native per-property reset arrows using the C++ class defaults, so edited settings can be restored without recreating the asset. The source history texture is now `8×2` (positions/confidence and cached HDR color); no CPU readbacks. Added `Glint.Source.Tracking.MotionAndDropoutPersistence` and `Glint.Editor.Lens.PerPropertyResetDefaults` native automation cases (32 tests registered). **UE5.8.3 compilation, shader execution, and UI behavior are pending validation**. See [0.7.2 technical notes](Docs/82-Dev07-02-Motion-Stability-and-Lens-Resets.md).
 
 ---

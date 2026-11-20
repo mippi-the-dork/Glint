@@ -1,7 +1,6 @@
 #include "GlintLensDetailsCustomization.h"
 #include "GlintLensProfile.h"
 #include "DetailLayoutBuilder.h"
-#include "DetailCategoryBuilder.h"
 #include "IDetailPropertyRow.h"
 #include "PropertyHandle.h"
 #include "UObject/UnrealType.h"
@@ -43,20 +42,13 @@ namespace
 
     void ResetToLensDefault(TSharedPtr<IPropertyHandle> Handle)
     {
-        if (!Handle.IsValid()) return;
-        if (Handle->CanResetToDefault())
-        {
-            Handle->ResetToDefault();
-        }
-        else
-        {
-            // Fallback for standalone Data Asset details that do not expose
-            // their native CDO reset affordance. A property handle writes this
-            // through UE's transaction/change notification pathway.
-            const FString DefaultText = GlintLensDefaults::ExportClassDefault(Handle->GetProperty());
-            Handle->SetValueFromFormattedString(DefaultText);
-        }
+        if (!Handle.IsValid() || !Handle->GetProperty()) return;
+        // Use the C++ class default explicitly. Generic UObject reset-to-default
+        // can treat a standalone asset instance as its own archetype.
+        const FString DefaultText = GlintLensDefaults::ExportClassDefault(Handle->GetProperty());
+        Handle->SetValueFromFormattedString(DefaultText);
     }
+
 }
 
 TSharedRef<IDetailCustomization> FGlintLensDetailsCustomization::MakeInstance()
@@ -74,11 +66,14 @@ void FGlintLensDetailsCustomization::CustomizeDetails(IDetailLayoutBuilder& Deta
         if (!Property->HasAnyPropertyFlags(CPF_Edit)) continue;
         TSharedRef<IPropertyHandle> Handle = DetailBuilder.GetProperty(Property->GetFName(), UGlintLensProfile::StaticClass());
         if (!Handle->IsValidHandle()) continue;
-        const FString CategoryName = Property->GetMetaData(TEXT("Category"));
-        IDetailCategoryBuilder& Category = DetailBuilder.EditCategory(FName(*CategoryName));
-        IDetailPropertyRow& Row = Category.AddProperty(Handle);
-        Row.OverrideResetToDefault(FResetToDefaultOverride::Create(
-            FIsResetToDefaultVisible::CreateStatic(&ShouldShowReset),
-            FResetToDefaultHandler::CreateStatic(&ResetToLensDefault), false));
+        // Edit the EXISTING default property row. Adding a second property row
+        // creates a duplicate whose reset override is not the row shown by the
+        // simple native Data Asset editor (the cause of the missing arrows).
+        if (IDetailPropertyRow* Row = DetailBuilder.EditDefaultProperty(Handle))
+        {
+            Row->OverrideResetToDefault(FResetToDefaultOverride::Create(
+                FIsResetToDefaultVisible::CreateStatic(&ShouldShowReset),
+                FResetToDefaultHandler::CreateStatic(&ResetToLensDefault), false));
+        }
     }
 }

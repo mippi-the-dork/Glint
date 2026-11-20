@@ -32,6 +32,7 @@ uint ElementCount;
 uint MaxSources;
 float SourceMinBrightness;
 float SourceSeparation;
+float SourceGroupingRadius;
 float SourceSmoothing;
 float SourcePersistence;
 uint ResetSourceHistory;
@@ -39,6 +40,7 @@ uint UseSourcePositions;
 uint DebugSources;
 float SourceEdgeFade;
 float SourceGain;
+float AuthoredEnergyLimit;
 
 struct FGlintRuntimeElement
 {
@@ -190,7 +192,11 @@ void GlintSelectSourcesCS(uint3 id : SV_DispatchThreadID)
         selectedUV[k] = float2(-100,-100);
         selectedLum[k] = 0.0;
     }
-    // Rank current candidates by brightness, while suppressing near-duplicates.
+    // Rank current candidates by HDR peak while collapsing multiple strong
+    // 32x32 tile maxima from the same large luminous region. This is a screen-
+    // space grouping heuristic, not an actor/light identity system. Artists can
+    // reduce the radius to preserve tightly packed independent lamps.
+    float groupDistance = max(SourceSeparation, SourceGroupingRadius);
     [loop] for (uint rank = 0u; rank < 8u; ++rank)
     {
         float strongest = SourceMinBrightness;
@@ -203,7 +209,7 @@ void GlintSelectSourcesCS(uint3 id : SV_DispatchThreadID)
             bool nearChosen = false;
             [unroll] for (int j = 0; j < 8; ++j)
             {
-                if (selectedLum[j] > 0.0 && distance(candidate.xy, selectedUV[j]) < SourceSeparation)
+                if (selectedLum[j] > 0.0 && distance(candidate.xy, selectedUV[j]) < groupDistance)
                     nearChosen = true;
             }
             if (!nearChosen)
@@ -422,8 +428,12 @@ float3 GlintEvaluateSourceElement(float2 uv, float4 source, float3 sourceColor, 
     float2 center = 0.5 + (source.xy - 0.5) * element.Geometry.y + element.Offset.xy;
     float2 delta = uv - center;
     delta.x *= float(BrightSize.x) / max(1.0, float(BrightSize.y));
-    delta = GlintRotate2(delta, -element.Geometry.w);
     float radius = max(0.002, 0.022 * element.Geometry.z);
+    // Conservative unrotated bounding sphere before per-element trigonometry,
+    // powers, and possible 16-ray loops. Never clips a visible authored shape.
+    float bound = 6.0 * radius * max(1.0, element.Shape.z);
+    if (dot(delta, delta) > bound * bound) return float3(0,0,0);
+    delta = GlintRotate2(delta, -element.Geometry.w);
     delta.x /= max(0.2, element.Shape.z); // artist-controlled anamorphic aspect
     float r = length(delta) / radius;
     if (r > 6.0) return float3(0,0,0);
@@ -525,13 +535,24 @@ float3 GlintEvaluateSourceElement(float2 uv, float4 source, float3 sourceColor, 
         float petalR = 1.0 + 0.14*max(0.2,secondary)*cos(angle*max(3.0,rays));
         shape = exp(-pow((r-petalR)/width,2.0))*0.65;
     }
-    else if (kind == 25u) // Deterministic dust speckle pattern: no time noise/flicker
+    else if (kind == 25u) // Jittered lens dust, stable in screen space (no frame noise).
     {
-        float2 cell = floor(delta/max(radius,0.001)*frequency);
-        float hash = frac(sin(dot(cell,float2(127.1,311.7)))*43758.5453);
-        float2 local = frac(delta/max(radius,0.001)*frequency)-0.5;
-        float speck = exp(-65.0*dot(local,local));
-        shape = hash>0.72 ? speck*exp(-0.15*falloff*r*r)*secondary*0.7 : 0.0;
+        float2 cellCoord = delta / max(radius,0.001) * frequency;
+        float2 cell = floor(cellCoord);
+        float probability = frac(sin(dot(cell, float2(127.1,311.7))) * 43758.5453);
+        float2 jitter = frac(sin(float2(dot(cell,float2(269.5,183.3)),
+                                  dot(cell,float2(419.2,371.9)))) * 43758.5453);
+        float2 local = frac(cellCoord) - (0.2 + 0.6*jitter);
+        float speck = exp(-70.0*dot(local,local));
+        shape = probability > 0.79 ? speck * exp(-0.24*falloff*r*r) * secondary*0.6 : 0.0;
+    }
+    // Real ghost reflections are rarely uniformly luminous around a perfect
+    // perimeter. Restrained angular variation is deliberate and stable.
+    if (kind == 1u || kind == 5u || kind == 6u || kind == 7u || kind == 8u ||
+        kind == 13u || kind == 14u || kind == 20u || kind == 21u || kind == 24u)
+    {
+        float theta = atan2(delta.y, delta.x);
+        shape *= 0.90 + 0.10*cos(theta * 3.0 + element.Geometry.y * 1.7);
     }
     float energy = saturate(source.z * 0.25) * source.w;
     return sourceColor * element.ColorStrength.rgb * (element.ColorStrength.a * shape * energy);
@@ -568,6 +589,7 @@ void GlintGhostCS(uint3 id : SV_DispatchThreadID)
         }
     }
     float3 result = ghost * GhostStrength + streak * StreakStrength;
+    float3 authored = 0.0;
     if (UseSourcePositions != 0u)
     {
         [loop] for (uint sourceIndex = 0u; sourceIndex < MaxSources; ++sourceIndex)
@@ -582,7 +604,7 @@ void GlintGhostCS(uint3 id : SV_DispatchThreadID)
             // gaps rather than sampled from a possibly empty new bright pass.
             float3 sourceColor = SourcePositions.Load(int3(sourceIndex, 1, 0)).rgb;
             [loop] for (uint e = 0u; e < ElementCount; ++e)
-                result += GlintEvaluateSourceElement(uv, source, sourceColor, FlareElements[e]);
+                authored += GlintEvaluateSourceElement(uv, source, sourceColor, FlareElements[e]);
             if (DebugSources != 0u)
             {
                 float2 delta = (uv - source.xy) * float2(BrightSize.x / max(1.0,BrightSize.y),1.0);
@@ -595,9 +617,17 @@ void GlintGhostCS(uint3 id : SV_DispatchThreadID)
     else
     {
         [loop] for (uint e = 0; e < ElementCount; ++e)
-            result += GlintEvaluateAuthored(uv, FlareElements[e]);
+            authored += GlintEvaluateAuthored(uv, FlareElements[e]);
     }
-    GhostOutput[id.xy] = float4(result, 1.0);
+    // Smooth, monotonic HDR shoulder. Does not hard-clip element brightness or
+    // change automatic ghosts/streaks; preserves sub-threshold contributions.
+    // Zero means no limiter for faithful artistic experimentation.
+    if (AuthoredEnergyLimit > 0.001)
+    {
+        float luminousEnergy = GlintLum(authored);
+        authored *= AuthoredEnergyLimit / (AuthoredEnergyLimit + luminousEnergy);
+    }
+    GhostOutput[id.xy] = float4(result + authored, 1.0);
 }
 
 [numthreads(8,8,1)]

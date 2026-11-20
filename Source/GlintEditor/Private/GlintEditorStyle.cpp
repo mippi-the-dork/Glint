@@ -14,10 +14,10 @@ void FGlintEditorStyle::Initialize()
         ? FPaths::Combine(Plugin->GetBaseDir(),TEXT("Resources"))
         : FPaths::ProjectPluginsDir()/TEXT("Glint/Resources");
     Style->SetContentRoot(Resources);
-    Style->Set(TEXT("Glint.Solo.Solid"),new FSlateImageBrush(Style->RootToContentDir(TEXT("solo-solid.png")),FVector2D(16,16)));
-    Style->Set(TEXT("Glint.Solo.Outline"),new FSlateImageBrush(Style->RootToContentDir(TEXT("solo-outline.png")),FVector2D(16,16)));
-    Style->Set(TEXT("Glint.Icon.Drag"),new FSlateImageBrush(Style->RootToContentDir(TEXT("drag-icon.png")),FVector2D(16,16)));
-    Style->Set(TEXT("Glint.Icon.Trash"),new FSlateImageBrush(Style->RootToContentDir(TEXT("trash-icon.png")),FVector2D(16,16)));
+    Style->Set(TEXT("Glint.Solo.Solid"),new FSlateImageBrush(Style->RootToContentDir(TEXT("solo-solid"), TEXT(".png")),FVector2D(16,16)));
+    Style->Set(TEXT("Glint.Solo.Outline"),new FSlateImageBrush(Style->RootToContentDir(TEXT("solo-outline"), TEXT(".png")),FVector2D(16,16)));
+    Style->Set(TEXT("Glint.Icon.Drag"),new FSlateImageBrush(Style->RootToContentDir(TEXT("drag-icon"), TEXT(".png")),FVector2D(16,16)));
+    Style->Set(TEXT("Glint.Icon.Trash"),new FSlateImageBrush(Style->RootToContentDir(TEXT("trash-icon"), TEXT(".png")),FVector2D(16,16)));
     FSlateStyleRegistry::RegisterSlateStyle(*Style);
 }
 void FGlintEditorStyle::Shutdown()

@@ -57,10 +57,12 @@ FGlintLensBlendData UGlintLensProfile::MakeRuntimeData() const
     Data.MaxSources = FMath::Clamp(MaxSources, 1, 8);
     Data.SourceMinBrightness = FMath::Clamp(SourceMinBrightness, 0.001f, 100.f);
     Data.SourceSeparation = FMath::Clamp(SourceSeparation, 0.005f, 0.25f);
+    Data.SourceGroupingRadius = FMath::Clamp(SourceGroupingRadius, 0.f, 0.3f);
     Data.SourceSmoothing = FMath::Clamp(SourceSmoothing, 0.f, 1.f);
     Data.SourcePersistence = FMath::Clamp(SourcePersistence, 0.f, 0.95f);
     Data.SourceEdgeFade = FMath::Clamp(SourceEdgeFade, 0.f, 0.25f);
     Data.SourceGain = FMath::Clamp(SourceGain, 0.f, 4.f);
+    Data.AuthoredEnergyLimit = FMath::Clamp(AuthoredEnergyLimit, 0.f, 128.f);
     Data.bFollowCameraAperture = bFollowCameraAperture;
     Data.ReferenceFStop = FMath::Clamp(ReferenceFStop, 0.1f, 32.f);
     Data.ApertureScaleResponse = FMath::Clamp(ApertureScaleResponse, 0.f, 2.f);

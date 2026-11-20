@@ -100,6 +100,7 @@ public:
         SHADER_PARAMETER(uint32, DebugSources)
         SHADER_PARAMETER(float, SourceEdgeFade)
         SHADER_PARAMETER(float, SourceGain)
+        SHADER_PARAMETER(float, AuthoredEnergyLimit)
     END_SHADER_PARAMETER_STRUCT()
     static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Params)
     { return IsFeatureLevelSupported(Params.Platform, ERHIFeatureLevel::SM5); }
@@ -136,6 +137,7 @@ public:
         SHADER_PARAMETER(uint32, MaxSources)
         SHADER_PARAMETER(float, SourceMinBrightness)
         SHADER_PARAMETER(float, SourceSeparation)
+        SHADER_PARAMETER(float, SourceGroupingRadius)
         SHADER_PARAMETER(float, SourceSmoothing)
         SHADER_PARAMETER(float, SourcePersistence)
         SHADER_PARAMETER(uint32, ResetSourceHistory)
@@ -315,10 +317,12 @@ FScreenPassTexture FGlintSceneViewExtension::AddGlintPass(
             Blended.MaxSources = FMath::RoundToInt(FMath::Lerp(float(Blended.MaxSources), float(Lens->MaxSources), Alpha));
             Blended.SourceMinBrightness = FMath::Lerp(Blended.SourceMinBrightness, Lens->SourceMinBrightness, Alpha);
             Blended.SourceSeparation = FMath::Lerp(Blended.SourceSeparation, Lens->SourceSeparation, Alpha);
+            Blended.SourceGroupingRadius = FMath::Lerp(Blended.SourceGroupingRadius, Lens->SourceGroupingRadius, Alpha);
             Blended.SourceSmoothing = FMath::Lerp(Blended.SourceSmoothing, Lens->SourceSmoothing, Alpha);
             Blended.SourcePersistence = FMath::Lerp(Blended.SourcePersistence, Lens->SourcePersistence, Alpha);
             Blended.SourceEdgeFade = FMath::Lerp(Blended.SourceEdgeFade, Lens->SourceEdgeFade, Alpha);
             Blended.SourceGain = FMath::Lerp(Blended.SourceGain, Lens->SourceGain, Alpha);
+            Blended.AuthoredEnergyLimit = FMath::Lerp(Blended.AuthoredEnergyLimit, Lens->AuthoredEnergyLimit, Alpha);
             Blended.bSourceDrivenAuthored = Lens->bSourceDrivenAuthored;
             Blended.bFollowCameraAperture = Lens->bFollowCameraAperture;
             Blended.ReferenceFStop = FMath::Lerp(Blended.ReferenceFStop, Lens->ReferenceFStop, Alpha);
@@ -485,6 +489,7 @@ FScreenPassTexture FGlintSceneViewExtension::AddGlintPass(
         Select->SourceMinBrightness = FGlintSourceSelection::CalculatePeakGate(
             Blended.SourceMinBrightness, Blended.Threshold, PreExposure);
         Select->SourceSeparation = Blended.SourceSeparation;
+        Select->SourceGroupingRadius = Blended.SourceGroupingRadius;
         Select->SourceSmoothing = Blended.SourceSmoothing;
         Select->SourcePersistence = Blended.SourcePersistence;
         Select->ResetSourceHistory = bResetHistory ? 1u : 0u;
@@ -519,6 +524,7 @@ FScreenPassTexture FGlintSceneViewExtension::AddGlintPass(
     Ghost->DebugSources = bDebugSources ? 1u : 0u;
     Ghost->SourceEdgeFade = Blended.SourceEdgeFade;
     Ghost->SourceGain = Blended.SourceGain;
+    Ghost->AuthoredEnergyLimit = Blended.AuthoredEnergyLimit;
     FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Glint.AutomaticAndAuthored"),
         GetGlobalShaderMap(View.GetFeatureLevel())->GetShader<FGlintGhostCS>(), Ghost,
         FComputeShaderUtils::GetGroupCount(SmallSize, FIntPoint(8, 8)));

@@ -1,7 +1,7 @@
 {
     "FileVersion": 3,
-    "Version": 16,
-    "VersionName": "0.7.2 - Motion Source Stability and Lens Default Reset",
+    "Version": 17,
+    "VersionName": "0.8.0 - Source Grouping, Optics and Editor Fixes",
     "FriendlyName": "Glint",
     "Description": "Automatic HDR-driven lens flares and authored optical flare assets for Unreal Engine 5.8.",
     "Category": "Rendering",

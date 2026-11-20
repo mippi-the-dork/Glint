@@ -88,4 +88,48 @@ bool FGlintSourcePeakThresholdTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGlintSourceGroupingTest,
+    "Glint.Source.Selection.RegionalGrouping",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FGlintSourceGroupingTest::RunTest(const FString& Parameters)
+{
+    const TArray<FGlintSourcePoint> Peaks = {
+        {FVector2f(0.40f,0.5f), 12.f},
+        {FVector2f(0.46f,0.5f), 11.f},
+        {FVector2f(0.48f,0.52f), 10.f},
+        {FVector2f(0.76f,0.5f), 9.f}
+    };
+    TestEqual(TEXT("prior tiny separation would split broad sun"),
+        FGlintSourceSelection::Select(Peaks, 8, 0.1f, 0.04f).Num(), 3);
+    const auto Grouped = FGlintSourceSelection::SelectGrouped(Peaks,8,0.1f,0.04f,0.125f);
+    TestEqual(TEXT("one broad source and one separate lamp"), Grouped.Num(), 2);
+    if (Grouped.Num() == 2)
+    {
+        TestTrue(TEXT("brightest peak retained"), FMath::IsNearlyEqual(Grouped[0].Brightness,12.f));
+        TestTrue(TEXT("distant highlight preserved"), FMath::IsNearlyEqual(Grouped[1].UV.X,0.76f));
+    }
+    TestEqual(TEXT("group radius zero means legacy separation"),
+        FGlintSourceSelection::SelectGrouped(Peaks,8,0.1f,0.04f,0.f).Num(), 3);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGlintSourceEnergyLimitTest,
+    "Glint.Source.Rendering.AuthoredEnergyShoulder",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FGlintSourceEnergyLimitTest::RunTest(const FString& Parameters)
+{
+    const FLinearColor Low(0.01f,0.01f,0.01f,1.f);
+    const FLinearColor Medium(3.f,3.f,3.f,1.f);
+    const FLinearColor Extreme(100.f,100.f,100.f,1.f);
+    const auto A = FGlintSourceSelection::LimitAuthoredEnergy(Low,6.f);
+    const auto B = FGlintSourceSelection::LimitAuthoredEnergy(Medium,6.f);
+    const auto C = FGlintSourceSelection::LimitAuthoredEnergy(Extreme,6.f);
+    TestTrue(TEXT("dim detail remains visible"),A.R > 0.009f);
+    TestTrue(TEXT("bright stacking remains monotonic"), B.R > A.R && C.R > B.R);
+    TestTrue(TEXT("large HDR contributions limited smoothly"), C.R < 6.f && C.R > 5.f);
+    TestEqual(TEXT("zero disables limiter"),
+        FGlintSourceSelection::LimitAuthoredEnergy(Extreme,0.f).R,100.f);
+    return true;
+}
+
 #endif

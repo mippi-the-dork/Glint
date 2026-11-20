@@ -20,6 +20,13 @@ struct GLINT_API FGlintSourceSelection
     static TArray<FGlintSourcePoint> Select(const TArray<FGlintSourcePoint>& Candidates,
         int32 Limit, float MinimumBrightness, float MinimumDistance);
 
+    /** CPU reference for GPU grouping radius, preserves separate highlights beyond the configured region. */
+    static TArray<FGlintSourcePoint> SelectGrouped(const TArray<FGlintSourcePoint>& Candidates,
+        int32 Limit, float MinimumBrightness, float MinimumDistance, float GroupingRadius);
+
+    /** CPU reference to soft HDR authored energy shoulder (zero disables). */
+    static FLinearColor LimitAuthoredEnergy(FLinearColor Input, float Limit);
+
     /** Match by screen distance and smooth tracked positions, resetting on camera cuts. */
     static void Smooth(TArray<FGlintSourcePoint>& Selected, const TArray<FGlintSourcePoint>& Previous,
         float PositionResponse, bool bCameraCut);

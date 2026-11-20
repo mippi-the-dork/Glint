@@ -40,10 +40,12 @@ struct GLINT_API FGlintLensBlendData
     int32 MaxSources = 8;
     float SourceMinBrightness = 0.025f;
     float SourceSeparation = 0.04f;
+    float SourceGroupingRadius = 0.125f; // Collapse multiple tile peaks from one luminous region.
     float SourceSmoothing = 0.35f;
     float SourcePersistence = 0.65f; // Retain confidence briefly if a bright candidate is lost for one or more frames.
     float SourceEdgeFade = 0.08f;
     float SourceGain = 1.f;
+    float AuthoredEnergyLimit = 6.f; // Soft HDR shoulder for overlapping authored optical elements.
     bool bFollowCameraAperture = false;
     float ReferenceFStop = 2.8f;
     float ApertureScaleResponse = 0.35f;
@@ -89,6 +91,8 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection", meta=(ClampMin="1", ClampMax="8")) int32 MaxSources = 8;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection", meta=(ClampMin="0.001", UIMax="1.0", ToolTip="Minimum extracted HDR brightness needed for an individual flare source.")) float SourceMinBrightness = 0.025f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection", meta=(ClampMin="0.005", ClampMax="0.25", ToolTip="Minimum distance between independent candidate sources, measured in viewport UV.")) float SourceSeparation = 0.04f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection", meta=(ClampMin="0.0", ClampMax="0.3", UIMax="0.2", ToolTip="Merge nearby HDR maxima from the same luminous region before creating independent flares. Increase for broad suns; decrease for tightly spaced separate lamps. Zero falls back to Source Separation."))
+    float SourceGroupingRadius = 0.125f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection", meta=(ClampMin="0.0", ClampMax="1.0", ToolTip="Controls smoothing of tracked source positions when motion is small. Rapid motion adapts automatically to prevent lag.")) float SourceSmoothing = 0.35f;
     /** Reduces one-frame source dropouts from HDR threshold changes, TAA or fast camera motion. Not an occlusion override. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection", meta=(ClampMin="0.0", ClampMax="0.95", ToolTip="Per-frame confidence retained when a source temporarily disappears from the bright candidate image. Zero disables persistence; ~0.65 fades after a few frames. Camera cuts reset all histories."))
@@ -99,6 +103,9 @@ public:
     /** Apply a gain to tracked-source authored optics without changing the automatic HDR field. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection", meta=(ClampMin="0.0", ClampMax="4.0"))
     float SourceGain = 1.f;
+    /** Soft HDR shoulder for all authored elements after they have been combined. Zero disables. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Composition", meta=(ClampMin="0.0", UIMax="32.0", ToolTip="Soft HDR energy limit for combined authored optics. Limits runaway overlapping flare brightness without hard clipping; zero disables."))
+    float AuthoredEnergyLimit = 6.f;
     /** Uses the resolved FPostProcessSettings aperture, which is also populated by Cine Cameras and Gameplay Cameras. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera Optics") bool bFollowCameraAperture = false;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera Optics", meta=(ClampMin="0.1", ClampMax="32.0")) float ReferenceFStop = 2.8f;

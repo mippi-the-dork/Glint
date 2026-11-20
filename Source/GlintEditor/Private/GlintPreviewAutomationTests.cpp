@@ -1,5 +1,8 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Interfaces/IPluginManager.h"
+#include "Misc/Paths.h"
+#include "GlintEditorStyle.h"
 #include "GlintPreviewSelection.h"
 #include "GlintElementDetailsProxy.h"
 
@@ -199,6 +202,39 @@ bool FGlintReorderState::RunTest(const FString& Parameters)
         FGlintPreviewSelectionOps::RemapIndexAfterMove(5,2,9),4);
     TestEqual(TEXT("intermediate items retain order after upwards move"),
         FGlintPreviewSelectionOps::RemapIndexAfterMove(2,6,1),3);
+    return true;
+}
+
+// Regression: Slate's RootToContentDir appends .png by default. Passing an
+// already-suffixed name yielded paths ending in .png.png and invisible icons.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGlintEditorIconResourcesTest,
+    "Glint.Editor.Outliner.IconFilesResolve",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FGlintEditorIconResourcesTest::RunTest(const FString& Parameters)
+{
+    const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("Glint"));
+    TestTrue(TEXT("Glint plugin registered"), Plugin.IsValid());
+    if (!Plugin.IsValid()) return false;
+    const FString Root = Plugin->GetBaseDir();
+    struct FIconCase { const TCHAR* Brush; const TCHAR* Filename; };
+    const FIconCase Icons[] = {
+        {TEXT("Glint.Solo.Outline"), TEXT("solo-outline.png")},
+        {TEXT("Glint.Solo.Solid"), TEXT("solo-solid.png")},
+        {TEXT("Glint.Icon.Drag"), TEXT("drag-icon.png")},
+        {TEXT("Glint.Icon.Trash"), TEXT("trash-icon.png")}
+    };
+    for (const FIconCase& Icon : Icons)
+    {
+        const FString Expected = FPaths::Combine(Root,TEXT("Resources"),Icon.Filename);
+        const FSlateBrush* Brush = FGlintEditorStyle::Get().GetBrush(Icon.Brush);
+        TestTrue(FString::Printf(TEXT("outliner PNG exists: %s"), Icon.Filename),
+            FPaths::FileExists(Expected));
+        TestTrue(FString::Printf(TEXT("registered Slate brush resolves: %s"), Icon.Brush),
+            Brush && FPaths::FileExists(Brush->GetResourceName().ToString()));
+        if (Brush)
+            TestEqual(FString::Printf(TEXT("icon path is not double-suffixed: %s"), Icon.Brush),
+                FPaths::GetCleanFilename(Brush->GetResourceName().ToString()), FString(Icon.Filename));
+    }
     return true;
 }
 #endif

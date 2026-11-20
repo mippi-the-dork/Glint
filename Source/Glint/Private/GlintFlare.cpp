@@ -124,12 +124,58 @@ FGlintElement UGlintFlare::MakePresetElement(EGlintElementType Type, int32 Prese
         E.Size *= 0.8f;
         E.SecondaryStrength *= 0.65f;
     }
-    else if (Preset == 2) // Cinematic: slightly larger / more expressive
+    else if (Preset == 2) // Cinematic: authored PER OPTICAL FAMILY, not one universal multiplier.
     {
         E.Label = FName(*FString::Printf(TEXT("Cinematic %s"), GetTypeName(Type)));
-        E.Intensity = FMath::Min(3.f, E.Intensity * 1.5f);
-        E.Size = FMath::Min(8.f, E.Size * 1.3f);
-        E.SecondaryStrength = FMath::Min(2.f, E.SecondaryStrength * 1.25f);
+        switch (Type)
+        {
+        case EGlintElementType::Glow:
+        case EGlintElementType::Halo:
+            E.Intensity *= 1.12f; E.Size *= 1.10f; E.Falloff *= 0.85f;
+            E.RingThickness *= 1.25f; break;
+        case EGlintElementType::VeilingGlow:
+            // A veiling glare must remain behind the subject, not white-out the frame.
+            E.Intensity *= 1.04f; E.Size *= 0.88f; E.Falloff *= 1.2f; break;
+        case EGlintElementType::Starburst:
+        case EGlintElementType::SpikeBall:
+        case EGlintElementType::Sparkle:
+        case EGlintElementType::CrossStar:
+            E.Intensity *= 1.22f; E.Size *= 1.14f; E.RaySharpness *= 0.87f;
+            E.SecondaryStrength *= 1.05f; break;
+        case EGlintElementType::Streak:
+        case EGlintElementType::VerticalStreak:
+        case EGlintElementType::DualStreak:
+            E.Intensity *= 1.16f; E.Size *= 1.16f; E.RaySharpness *= 0.85f; break;
+        case EGlintElementType::Ring:
+        case EGlintElementType::Hoop:
+        case EGlintElementType::MultiIris:
+        case EGlintElementType::EdgeRing:
+        case EGlintElementType::PolygonIris:
+        case EGlintElementType::ApertureBladeRing:
+        case EGlintElementType::ArcReflection:
+        case EGlintElementType::PetalIris:
+            E.Intensity *= 1.12f; E.Size *= 1.08f;
+            E.RingThickness = FMath::Min(1.f, E.RingThickness * 1.60f);
+            E.SecondaryStrength *= 0.90f; break;
+        case EGlintElementType::Ghost:
+        case EGlintElementType::Iris:
+        case EGlintElementType::ApertureGhost:
+        case EGlintElementType::SoftDisc:
+            E.Intensity *= 1.14f; E.Size *= 1.1f; E.Falloff *= 0.83f; break;
+        case EGlintElementType::DustCluster:
+            E.Intensity *= 1.08f; E.Size *= 0.95f;
+            E.SecondaryStrength *= 0.75f; E.DetailFrequency *= 0.85f; break;
+        case EGlintElementType::Shimmer:
+        case EGlintElementType::Caustic:
+            E.Intensity *= 1.08f; E.Size *= 1.1f; E.SecondaryStrength *= 0.72f;
+            E.DetailFrequency *= 0.8f; break;
+        case EGlintElementType::Smear:
+            E.Intensity *= 1.16f; E.Size *= 1.13f; E.AspectRatio *= 1.12f; break;
+        default:
+            E.Intensity *= 1.1f; break;
+        }
+        E.Intensity = FMath::Min(3.f, E.Intensity);
+        E.Size = FMath::Clamp(E.Size, 0.05f, 8.f);
     }
     return E;
 }

@@ -134,6 +134,8 @@ bool FGlintSourceControls::RunTest(const FString& Parameters)
     Lens->MaxSources = 100;
     Lens->SourceMinBrightness = -10.f;
     Lens->SourceSeparation = 2.f;
+    Lens->SourceGroupingRadius = 8.f;
+    Lens->AuthoredEnergyLimit = -5.f;
     Lens->SourceSmoothing = -1.f;
     Lens->SourceEdgeFade = 0.99f;
     Lens->SourceGain = -20.f;
@@ -146,6 +148,8 @@ bool FGlintSourceControls::RunTest(const FString& Parameters)
     TestEqual(TEXT("source budget capped at eight"), Packed.MaxSources, 8);
     TestEqual(TEXT("minimum source brightness clamped"), Packed.SourceMinBrightness, 0.001f);
     TestEqual(TEXT("source separation clamped"), Packed.SourceSeparation, 0.25f);
+    TestEqual(TEXT("grouping radius clamped"), Packed.SourceGroupingRadius, 0.3f);
+    TestEqual(TEXT("authored energy floor is nonnegative"), Packed.AuthoredEnergyLimit, 0.f);
     TestEqual(TEXT("source response clamped"), Packed.SourceSmoothing, 0.f);
     return true;
 }

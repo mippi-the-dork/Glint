@@ -1,3 +1,5 @@
+> **Latest:** [Glint 0.8.0 Dev08 — release and QA notes](86-Dev08-Release-Notes-and-QA.md), [source grouping/energy](83-Dev08-Source-Grouping-and-HDR-Energy.md), [icon and reset fixes](84-Dev08-Editor-Brushes-and-Reset-Arrows.md), [optical presets/performance](85-Dev08-Optical-Presets-and-Performance.md). **35 Glint automation tests registered; UE5.8.3 build and visual validation pending.**
+
 > **Current source handoff:** [Glint 0.7.0 — Dev07 expanded authoring and editor fixes](80-Dev07-Release-Notes.md) lists this source candidate, known validation limits, and the 29-test suite. See [editor preview details](77-Dev07-Editor-Refresh-and-Preview.md), [optical library](78-Dev07-Optical-Library-and-Presets.md), and [QA checklist](79-Dev07-Manual-QA-and-Automation.md). The older v1 research chapters remain design targets, not declarations of complete features.
 
 > **Current source handoff:** [Glint 0.6.1 — Slate row build fix](76-Dev06-Slate-Row-BuildFix.md) documents the most recent Glint-only compile correction, the 0.6 UI changes and the Windows validation still required. The older research chapters remain v1 product targets, not claims of implemented functionality.
@@ -176,3 +178,10 @@ The research in [34](34-Other-Engines-Real-Time-Lens-Flares.md)–[37](37-Cross-
 | [80 — Dev07 source release notes](80-Dev07-Release-Notes.md) | Implemented changes, static checks, and remaining Windows validation |
 
 - [Glint 0.7.1 — Automation budget fixture correction](81-Dev07-01-Automation-Budget-Correction.md)
+
+## Glint 0.8.0 — Dev08 source grouping, optical quality and editor corrections
+
+- [83 — Source grouping and HDR energy](83-Dev08-Source-Grouping-and-HDR-Energy.md)
+- [84 — Editor brush icons and Lens reset arrows](84-Dev08-Editor-Brushes-and-Reset-Arrows.md)
+- [85 — Optical presets and performance](85-Dev08-Optical-Presets-and-Performance.md)
+- [86 — Release notes and QA](86-Dev08-Release-Notes-and-QA.md)

@@ -33,6 +33,24 @@ TArray<FGlintSourcePoint> FGlintSourceSelection::Select(const TArray<FGlintSourc
     return Selected;
 }
 
+TArray<FGlintSourcePoint> FGlintSourceSelection::SelectGrouped(
+    const TArray<FGlintSourcePoint>& Candidates, int32 Limit, float MinimumBrightness,
+    float MinimumDistance, float GroupingRadius)
+{
+    return Select(Candidates, Limit, MinimumBrightness,
+        FMath::Max(MinimumDistance, FMath::Clamp(GroupingRadius, 0.f, 0.3f)));
+}
+
+FLinearColor FGlintSourceSelection::LimitAuthoredEnergy(FLinearColor Input, float Limit)
+{
+    if (Limit <= 0.001f) return Input;
+    const float Luminance = 0.2126f * FMath::Max(0.f, Input.R)
+                          + 0.7152f * FMath::Max(0.f, Input.G)
+                          + 0.0722f * FMath::Max(0.f, Input.B);
+    const float Scale = Limit / (Limit + Luminance);
+    return FLinearColor(Input.R * Scale, Input.G * Scale, Input.B * Scale, Input.A);
+}
+
 void FGlintSourceSelection::Smooth(TArray<FGlintSourcePoint>& Selected,
     const TArray<FGlintSourcePoint>& Previous, float PositionResponse, bool bCameraCut)
 {
