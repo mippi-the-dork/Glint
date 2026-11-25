@@ -60,6 +60,8 @@ FGlintLensBlendData UGlintLensProfile::MakeRuntimeData() const
     Data.SourceGroupingRadius = FMath::Clamp(SourceGroupingRadius, 0.f, 0.3f);
     Data.SourceSmoothing = FMath::Clamp(SourceSmoothing, 0.f, 1.f);
     Data.SourcePersistence = FMath::Clamp(SourcePersistence, 0.f, 0.95f);
+    Data.SourceHysteresis = FMath::Clamp(SourceHysteresis, 0.25f, 1.f);
+    Data.SourcePositionDeadZone = FMath::Clamp(SourcePositionDeadZone, 0.f, 0.01f);
     Data.SourceEdgeFade = FMath::Clamp(SourceEdgeFade, 0.f, 0.25f);
     Data.SourceGain = FMath::Clamp(SourceGain, 0.f, 4.f);
     Data.AuthoredEnergyLimit = FMath::Clamp(AuthoredEnergyLimit, 0.f, 128.f);

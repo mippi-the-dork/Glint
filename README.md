@@ -1,3 +1,65 @@
+**Glint 0.8.7.3 SM6 startup hotfix:** Fixed a reserved HLSL variable (`centroid`) in candidate detection and restored the `[numthreads(1,1,1)]` attribute to the source-selection compute entry point. Unreal shader compilation still needs validation. See [Docs/99](Docs/99-Dev08-07-03-SM6-Candidate-Source-Selection-Fix.md). Previous Glint 0.8.7.2 API fixes and 50 registered tests are retained.
+
+**Glint 0.8.7.2 UE 5.8 API hotfix:** Replaced the deprecated no-AA projection accessor in camera reprojection; the previous user build succeeded with only this Glint C4996 warning. No flare behavior or shader changes. See [Docs/98](Docs/98-Dev08-07-02-UE58-NoAA-Projection-API.md). Run `Automation RunTests Glint` after rebuilding; 50 tests registered.
+
+---
+
+# Glint 0.8.7 — HDR Sun Peak Protection, Camera Motion & Native Asset Picker
+
+**UE 5.8.x / Win64, complete source plugin.** Your Glint 0.8.6.1 passed **47/47** Unreal automation tests, but manual QA showed that the sun was frequently excluded even though it was visible in the filtered HDR view, camera rotation produced jerky optical movement, action buttons remained visually blank, and the PP Weighted Blendables picker offered unwanted inline profile creation.
+
+**0.8.7 updates** candidate collection to preserve both the best coherent region and the raw brightest HDR peak per tile; prioritizes compact peaks, and reprojects previous tracked source UVs through unjittered camera matrices **before** matching. It disables inline construction for Glint Lens assets and switches Solo/Delete to direct native `SButton.Text("S"/"X")` for the time being. The full engineering/QA handoff is in [Docs/96](Docs/96-Dev08-07-Peak-Camera-Reprojection-and-UX.md).
+
+**50 native tests registered; C++/SM6 compilation, GPU performance, actual viewport results, and Slate visibility remain unverified for this package.** This pass doubles the number of candidate texels consumed by the tracker; test its GPU cost. The native Unreal image-based flare avoids discrete source tracking, so this is a targeted improvement, not a claim of full parity. Replace the complete `Plugins/Glint` folder, rebuild, run `Automation RunTests Glint`, then compare the sunny scene, camera rotation, and editor controls. No engine edits, no Probe dependency, no intended asset migration.
+
+---
+
+# Glint 0.8.6 — Coherent HDR Detection & Source Challenger Tracking
+
+**UE 5.8.x / Win64 / complete source plugin.** In the user's previous 0.8.5.1 run, all **43 native tests passed**, but manual screenshots confirmed the Solo/Delete images were still invisible and some source positions wiggled while bright clouds/ground frequently beat the visible sun. 0.8.6 adds a *separate low-resolution spatial HDR detection filter*, source-region ranking and centroids, a relative new-source gate, and sustained (including nearby-region) challenger replacement when slots are full. The original HDR scene and raw peak brightness remain unblurred. Solo/Delete now use visible font glyphs **S / X** instead of the unreliable brush-backed action images. Mode `r.Glint.DebugSources 4` shows the filtered detection signal alongside tracked crosses.
+
+**47 registered native tests (four new); Windows C++ compile, SM6 shader execution, actual visual quality, Slate paint, and GPU cost are NOT yet verified for 0.8.6.** No engine edits, no dependency on Probe, and no asset migration. **Reinstall the complete `Plugins/Glint` folder and restart Unreal** to reset the expanded 8×3 source history. Run `Automation RunTests Glint` and see the [full 0.8.6 handoff and manual QA](Docs/94-Dev08-06-Coherent-HDR-Source-Detection.md). Source-only validation: `python Plugins/Glint/Tools/CheckShaderContracts.py` and `python Plugins/Glint/Tools/CheckDev086Source.py`. The previous 0.8.4.1 GPU capture remains a one-frame reference only; this revision may cost *more* GPU time due to its added filter.
+
+---
+
+# Glint 0.8.5 — Source Identity, HDR Tint, and Editor Recovery
+
+**UE5.8 Windows source plugin.** This pass addresses stationary-camera source hopping, erratic confidence-state changes, HDR source-color sampling, and missing Solo/Delete outliner icons. Two added native automation tests cover stationary source identity and HDR confirmation. The `ReleaseHysteresis` test now has an explicit float tolerance. New debug mode `r.Glint.DebugSources 3` colors sources by persistent slot index. **43 native tests are registered; UE compilation and native execution of 0.8.5 are not yet verified.**
+
+**Measured pre-update GPU reference:** one Glint-off frame was 6.0827 ms; a Glint-on frame was 7.2362 ms. The identifiable Glint passes totaled 0.9419 ms, about 87% of that in candidate finding and source selection. A single captured frame pair is a diagnostic reference, not a stable benchmark or a claimed post-update gain.
+
+**QA:** `Automation RunTests Glint`, `python Plugins/Glint/Tools/CheckShaderContracts.py`, `python Plugins/Glint/Tools/CheckDev085Source.py`. Full changelog, limitations, profiler findings, and explicit manual acceptance: [0.8.5 development handoff](Docs/92-Dev08-05-Temporal-Source-Identity.md).
+
+---
+
+# Glint 0.8.4.1 — Shader startup fix
+
+**UE5.8 Windows source plugin.** Fixes the `FGlintGhostCS` SM6 startup compile error in 0.8.4: `streak` is now declared in the enclosing function scope, rather than inside the legacy automatic branch. No optical algorithms or editor behavior were changed. All **41** existing native tests are retained; the most recent user-confirmed native run was **37/37 on 0.8.3**. Compilation and execution of 0.8.4.1 in UE5.8 remain unverified.
+
+**Validation:** `python Plugins/Glint/Tools/CheckShaderContracts.py`, `python Plugins/Glint/Tools/CheckDev0841ShaderScope.py`, and `python Plugins/Glint/Tools/CheckDev084Source.py`. Detailed notes: [0.8.4.1 shader hotfix](Docs/91-Dev08-04-01-Shader-Scope-Fix.md).
+
+---
+
+# Glint 0.8.4 — Stable HDR Sources & Source-Relative Automatic Optics
+
+**UE5.8 Windows source plugin.** The user last verified **37/37 native tests on 0.8.3**. This update adds four tests (**41 registered**); UE5.8.3 compile, GPU and Slate acceptance remain pending.
+
+**New:** source acquisition/release hysteresis, stable previous-source slots, local HDR-weighted candidate centroids, temporal HDR color/brightness smoothing and source-position dead zone. The default automatic effect no longer resamples inverted copies of the sky: it draws source-relative optical rings, discs and bounded anamorphic streaks. The previous automatic image warp remains an explicit diagnostic (`r.Glint.LegacyAutomaticField 1`, default `0`). Solo/Delete glyphs are recentered within their 24px buttons. `r.Glint.DebugSources 2` gives confidence-colored source markers (magenta/amber/cyan). The new Lens Profile controls are **Source Hysteresis** and **Source Position Dead Zone**.
+
+**QA:** `Automation RunTests Glint`, `python Plugins/Glint/Tools/CheckShaderContracts.py`, and `python Plugins/Glint/Tools/CheckDev084Source.py`. See [Glint 0.8.4 implementation, limitations, and detailed manual testing](Docs/90-Dev08-04-Source-Stability-and-Automatic-Optics.md). Test with your normal temporal upscaler and separately at native resolution; all GPU and native test results require real UE5.8.3 verification.
+
+---
+
+# Glint 0.8.1 — Dev08 Manual QA Corrections
+
+**Previous validated version:** 35/35 native tests passed on Glint 0.8.0. **New package:** 36 registered tests, expanded shader contract audits; Windows UE5.8.3 compilation and GUI/GPU confirmation pending.
+
+**What changed:** `r.Glint.DebugSources 1` now paints strongly contrasted magenta plus signs with black outlines at each tracked bright source, at the final image resolution rather than into quarter-resolution flare. The Solo and Delete actions draw their own Slate line geometry instead of relying on brush resources that repeatedly appeared blank. Lens Profile numeric and Boolean rows include an explicit Reset-to-Class-Default control beside the native value editor. No authored element properties, scene-source selection, source grouping, or energy limiting math changed.
+
+**Performance findings (single uploaded GPU `.profViz`):** named Glint passes add up to approximately **0.2775 ms**, and the captured GPU frame was approximately **7.43 ms**. This does **not** explain a 65-versus-85 FPS difference on its own; make controlled captures with `r.Glint.Enabled 0` versus `1` and debug overlays disabled. See [Dev08.1 release notes and QA](Docs/87-Dev08-01-Manual-QA-Hotfix.md).
+
+---
+
 # Glint 0.8.0 — Dev08 Source Grouping, Optical Quality and Editor Fixes
 
 **Previous validated version:** the user ran **32/32 native Glint tests successfully on 0.7.2**, and camera-motion flare dropout improved. **New version:** 35 registered Glint automation tests; Windows build, live GPU behavior and visual UI validation pending.
@@ -109,3 +171,8 @@ For the editor, verify all three modes, element defaults, shape Details, drag/dr
 ## Validation and boundaries
 
 Previous 0.4.0 passed 16 UE automation tests; the user verified all 22 Glint 0.5.x tests before the new toolbar test was added. This branch registers 23 tests, and 0.6.1 has not been compiled or GPU-tested in UE5.8.3 here; the user's prior build log confirmed only the runtime module linked. No Unreal Engine modifications. Only Glint code and assets are in the archive. The README and [full documentation index](Docs/README.md) contain technical and design references.
+
+
+### 0.8.3 development diagnostics
+
+`r.Glint.DebugFlareOnly 1` shows Glint over pure black while retaining scene-HDR source detection. `r.Glint.FlareResolutionDivisor 1/2/4` switches full/half/quarter flare-buffer resolution (default 2). With **Source Driven Authored** off, authored elements are disabled; automatic processing stays independent. The original image-field authored approximation is available for comparison via `r.Glint.LegacyAuthoredField 1` only. See `Docs/89-Dev08-03-Authored-Isolation-and-Flare-Diagnostics.md`.

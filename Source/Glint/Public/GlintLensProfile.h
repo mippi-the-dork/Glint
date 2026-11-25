@@ -43,6 +43,8 @@ struct GLINT_API FGlintLensBlendData
     float SourceGroupingRadius = 0.125f; // Collapse multiple tile peaks from one luminous region.
     float SourceSmoothing = 0.35f;
     float SourcePersistence = 0.65f; // Retain confidence briefly if a bright candidate is lost for one or more frames.
+    float SourceHysteresis = 0.65f; // Previously tracked sources can remain below the acquisition gate.
+    float SourcePositionDeadZone = 0.0015f; // Normalized viewport UV deadzone against small jitter.
     float SourceEdgeFade = 0.08f;
     float SourceGain = 1.f;
     float AuthoredEnergyLimit = 6.f; // Soft HDR shoulder for overlapping authored optical elements.
@@ -55,7 +57,9 @@ struct GLINT_API FGlintLensBlendData
 };
 
 /** Assign to a camera or Post Process Volume through Weighted Blendables. */
-UCLASS(BlueprintType)
+// A lens is a Content Browser asset. UDataAsset inherits EditInlineNew, which
+// incorrectly adds a Create New choice inside Post Process Weighted Blendables.
+UCLASS(BlueprintType, NotEditInlineNew)
 class GLINT_API UGlintLensProfile : public UDataAsset, public IBlendableInterface
 {
     GENERATED_BODY()
@@ -86,8 +90,12 @@ public:
     float ChromaticShift = 0.003f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Optics", meta=(ClampMin="0.05", UIMax="1.0"))
     float GhostSpacing = 0.55f;
-    /** Evaluate authored elements relative to individual GPU-identified bright sources. Disable to compare with v0.2 full-image optical field. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection") bool bSourceDrivenAuthored = true;
+    /** Draw authored optics around GPU-detected HDR sources. Disabling turns off
+        authored drawing without changing automatic ghosts/streaks. The deprecated
+        image-warp renderer is available only through r.Glint.LegacyAuthoredField. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection",
+        meta=(ToolTip="Enable source-relative authored optical elements. OFF disables authored drawing and does not affect automatic flares. The old image-field approximation is diagnostic-only: r.Glint.LegacyAuthoredField 1."))
+    bool bSourceDrivenAuthored = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection", meta=(ClampMin="1", ClampMax="8")) int32 MaxSources = 8;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection", meta=(ClampMin="0.001", UIMax="1.0", ToolTip="Minimum extracted HDR brightness needed for an individual flare source.")) float SourceMinBrightness = 0.025f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection", meta=(ClampMin="0.005", ClampMax="0.25", ToolTip="Minimum distance between independent candidate sources, measured in viewport UV.")) float SourceSeparation = 0.04f;
@@ -97,6 +105,13 @@ public:
     /** Reduces one-frame source dropouts from HDR threshold changes, TAA or fast camera motion. Not an occlusion override. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection", meta=(ClampMin="0.0", ClampMax="0.95", ToolTip="Per-frame confidence retained when a source temporarily disappears from the bright candidate image. Zero disables persistence; ~0.65 fades after a few frames. Camera cuts reset all histories."))
     float SourcePersistence = 0.65f;
+    /** Once a source is being tracked, retain it down to this fraction of the acquisition
+        threshold. Stabilizes brightness jitter from temporal reconstruction and pre-exposure. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection", meta=(ClampMin="0.25", ClampMax="1.0", ToolTip="Release threshold as a fraction of the source acquisition threshold. 0.65 means an existing source can remain visible at 65% of the acquisition threshold; new sources still require the full threshold."))
+    float SourceHysteresis = 0.65f;
+    /** Do not move tracked source centers for subpixel/temporal jitter. In normalized viewport UV. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection", meta=(ClampMin="0.0", ClampMax="0.01", UIMax="0.005", ToolTip="Normalized UV dead zone for stationary-source position changes. Default 0.0015 is around 1-3 pixels depending on viewport size. Larger values are steadier but can cause stepped motion."))
+    float SourcePositionDeadZone = 0.0015f;
     /** Smoothly fade image-selected sources as they leave any screen edge. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection", meta=(ClampMin="0.0", ClampMax="0.25", ToolTip="Normalized distance from the viewport edge over which source-aware flares fade out. Zero disables edge fade."))
     float SourceEdgeFade = 0.08f;
@@ -104,7 +119,7 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Source Detection", meta=(ClampMin="0.0", ClampMax="4.0"))
     float SourceGain = 1.f;
     /** Soft HDR shoulder for all authored elements after they have been combined. Zero disables. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Composition", meta=(ClampMin="0.0", UIMax="32.0", ToolTip="Soft HDR energy limit for combined authored optics. Limits runaway overlapping flare brightness without hard clipping; zero disables."))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Composition", meta=(DisplayName="Authored Energy Soft Limit", ClampMin="0.0", UIMax="32.0", ToolTip="HDR soft shoulder, not an intensity gain or hard maximum. Larger values approach unmodified brightness; zero disables. Use Source Gain / element Strength to raise flare intensity."))
     float AuthoredEnergyLimit = 6.f;
     /** Uses the resolved FPostProcessSettings aperture, which is also populated by Cine Cameras and Gameplay Cameras. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Camera Optics") bool bFollowCameraAperture = false;

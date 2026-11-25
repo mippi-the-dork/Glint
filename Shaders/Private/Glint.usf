@@ -1,4 +1,4 @@
-// Glint v0.3: GPU candidate extraction, temporal source selection, and authored optics. No engine shader source copied.
+// Glint v0.8.6: filtered HDR region detection, temporal source selection, and authored optics. No engine shader source copied.
 // Coordinates are source-viewport-relative; all resources remain inside RDG.
 #include "/Engine/Private/Common.ush"
 
@@ -6,6 +6,8 @@ Texture2D<float4> HDRScene;
 RWTexture2D<float4> BrightOutput;
 RWTexture2D<float4> GhostOutput;
 RWTexture2D<float4> CandidateOutput;
+RWTexture2D<float4> DetectionOutput;
+Texture2D<float4> DetectionTexture;
 RWTexture2D<float4> SourcesOutput;
 Texture2D<float4> CandidateTexture;
 Texture2D<float4> SourceHistory;
@@ -16,6 +18,8 @@ Texture2D<float4> FlareTexture;
 int2 SourceMin;
 int2 SourceSize;
 int2 BrightSize;
+uint SampleStride;
+uint DetectionRadius;
 int2 FullSize;
 int2 CandidateSize;
 float BrightThreshold;
@@ -35,12 +39,21 @@ float SourceSeparation;
 float SourceGroupingRadius;
 float SourceSmoothing;
 float SourcePersistence;
+float SourceHysteresis;
+float SourcePositionDeadZone;
+float SourceCameraMotion;
+float4x4 SourcePreviousToCurrentClip;
+uint UseSourceReprojection;
+float SourceRelativeScoreFloor;
+float SourceReplacementRatio;
+uint SourceReplacementFrames;
 uint ResetSourceHistory;
 uint UseSourcePositions;
 uint DebugSources;
 float SourceEdgeFade;
 float SourceGain;
 float AuthoredEnergyLimit;
+uint UseSourceAutomatic;
 
 struct FGlintRuntimeElement
 {
@@ -53,6 +66,7 @@ struct FGlintRuntimeElement
 StructuredBuffer<FGlintRuntimeElement> FlareElements;
 float FlareIntensity;
 uint DebugBrightPass;
+uint DebugFlareOnly;
 RWTexture2D<float4> PreviewOutput;
 int2 PreviewSize;
 float2 PreviewSourceUV;
@@ -92,7 +106,7 @@ float3 GlintSampleBright(float2 uv)
 void GlintExtractCS(uint3 id : SV_DispatchThreadID)
 {
     if (any(id.xy >= uint2(BrightSize))) return;
-    int2 base = SourceMin + int2(id.xy) * 4;
+    int2 base = SourceMin + int2(id.xy) * int(SampleStride);
     float3 average = 0.0;
     float3 highest = 0.0;
     float peak = -1.0;
@@ -104,7 +118,7 @@ void GlintExtractCS(uint3 id : SV_DispatchThreadID)
     [unroll] for (int x = 0; x < 4; ++x)
     {
         int2 p = base + int2(x, y);
-        if (all(p < sourceEnd))
+        if (x < int(SampleStride) && y < int(SampleStride) && all(p < sourceEnd))
         {
             float3 color = max(HDRScene.Load(int3(p, 0)).rgb, 0.0);
             average += color;
@@ -126,15 +140,61 @@ void GlintExtractCS(uint3 id : SV_DispatchThreadID)
     BrightOutput[id.xy] = float4(mixed * (min(response, MaxContribution) / max(lum, 0.0001)), max(peak, 0.0));
 }
 
-// Each 32x32 quarter-resolution tile chooses its strongest HDR sample. A
-// shared-memory reduction keeps the expensive scan distributed across threads.
+// Spatially filtered *detection* only. Never blur the HDR scene, the final
+// flare, or the raw peak channel used by release/acquisition gates.
+// A single 3x3/5x5 low-resolution pass stabilizes TAA subpixel fluctuations.
+[numthreads(8,8,1)]
+void GlintBuildDetectionCS(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id.xy >= uint2(BrightSize))) return;
+    float weighted = 0.0;
+    float sum = 0.0;
+    int radius = int(min(DetectionRadius, 2u));
+    [loop] for (int y=-2; y<=2; ++y)
+    [loop] for (int x=-2; x<=2; ++x)
+    {
+        if (abs(x)>radius || abs(y)>radius) continue;
+        int2 pixel = int2(id.xy) + int2(x,y);
+        if (any(pixel < 0) || any(pixel >= BrightSize)) continue;
+        float w = float((radius + 1 - abs(x)) * (radius + 1 - abs(y)));
+        weighted += BrightTexture.Load(int3(pixel,0)).a * w;
+        sum += w;
+    }
+    float rawPeak = BrightTexture.Load(int3(id.xy,0)).a;
+    float smoothLum = weighted / max(sum, 1.0);
+    DetectionOutput[id.xy] = float4(smoothLum, rawPeak, 0.0, 1.0);
+}
+
+// The rank balances extremely bright *small* emitters with coherent spatial
+// support. Raw HDR peak survives smoothing and still controls source gates.
+// A diffuse cloud/large flat bright area receives no extra sharpness bonus.
+float GlintDetectionRank(float peak, float region)
+{
+    float foreground = max(peak, 0.0);
+    float filtered = max(region, 0.0);
+    float contrast = saturate((foreground - filtered) / max(filtered, 0.1));
+    // Peak evidence dominates broad, low-contrast illumination. The region
+    // term still helps large legitimate emitters, but no longer overwhelms a
+    // smaller HDR sun disk simply because a cloud spans more pixels.
+    return sqrt(foreground) * (0.65 + 1.65 * contrast) + 0.30 * sqrt(filtered);
+}
+
+// Parallel 32x32-tile reduction retains the best region *score*, not simply
+// the largest individual pixel. Adjacent bright texels contribute to a stable
+// larger neighborhood centroid, including across tile boundaries.
+groupshared float GlintTileScore[64];
+groupshared float GlintTileRawPeak[64];
+groupshared float2 GlintTileRawPosition[64];
 groupshared float GlintTilePeak[64];
 groupshared float2 GlintTilePosition[64];
 [numthreads(8,8,1)]
 void GlintFindCandidatesCS(uint3 group : SV_GroupID, uint3 lane : SV_GroupThreadID)
 {
     uint index = lane.y * 8 + lane.x;
+    float bestScore = 0.0;
     float bestLum = 0.0;
+    float rawLum = 0.0;
+    float2 rawUV = float2(0,0);
     float2 bestUV = float2(0,0);
     [unroll] for (uint y = 0; y < 4; ++y)
     [unroll] for (uint x = 0; x < 4; ++x)
@@ -142,169 +202,371 @@ void GlintFindCandidatesCS(uint3 group : SV_GroupID, uint3 lane : SV_GroupThread
         int2 p = int2(group.xy * 32 + lane.xy * 4 + uint2(x,y));
         if (all(p < BrightSize))
         {
-            // Alpha carries the unclipped brightest HDR sample of the 4x4
-            // extraction block, independent of the artistic bright pass.
             float lum = BrightTexture.Load(int3(p,0)).a;
-            if (lum > bestLum)
+            float region = DetectionTexture.Load(int3(p,0)).r;
+            if (lum > rawLum) { rawLum = lum; rawUV = (float2(p)+0.5)/float2(BrightSize); }
+            float score = GlintDetectionRank(lum, region);
+            if (score > bestScore || (score == bestScore && lum > bestLum))
             {
+                bestScore = score;
                 bestLum = lum;
                 bestUV = (float2(p) + 0.5) / float2(BrightSize);
             }
         }
     }
+    GlintTileRawPeak[index] = rawLum;
+    GlintTileRawPosition[index] = rawUV;
+    GlintTileScore[index] = bestScore;
     GlintTilePeak[index] = bestLum;
     GlintTilePosition[index] = bestUV;
     GroupMemoryBarrierWithGroupSync();
     [unroll] for (uint stride = 32; stride >= 1; stride >>= 1)
     {
-        if (index < stride && GlintTilePeak[index+stride] > GlintTilePeak[index])
+        if (index < stride && (GlintTileScore[index+stride] > GlintTileScore[index] ||
+            (GlintTileScore[index+stride] == GlintTileScore[index] && GlintTilePeak[index+stride] > GlintTilePeak[index])))
         {
+            GlintTileScore[index] = GlintTileScore[index+stride];
             GlintTilePeak[index] = GlintTilePeak[index+stride];
             GlintTilePosition[index] = GlintTilePosition[index+stride];
+        }
+        if (index < stride && GlintTileRawPeak[index+stride] > GlintTileRawPeak[index])
+        {
+            GlintTileRawPeak[index] = GlintTileRawPeak[index+stride];
+            GlintTileRawPosition[index] = GlintTileRawPosition[index+stride];
         }
         GroupMemoryBarrierWithGroupSync();
     }
     if (index == 0)
-        CandidateOutput[group.xy] = float4(GlintTilePosition[0], GlintTilePeak[0], GlintTilePeak[0] > 0.0 ? 1.0 : 0.0);
+    {
+        float2 weightedUV = 0.0;
+        float totalWeight = 0.0;
+        int2 center = int2(GlintTilePosition[0] * float2(BrightSize));
+        // Region centroid uses smoothed illumination rather than one TAA peak.
+        // Radial weighting prevents the centroid from sliding across the whole
+        // sky when a broad, fairly uniform cloud is selected.
+        [loop] for (int sy=-5; sy<=5; ++sy)
+        [loop] for (int sx=-5; sx<=5; ++sx)
+        {
+            int2 pixel = center + int2(sx,sy);
+            if (all(pixel >= 0) && all(pixel < BrightSize))
+            {
+                float region = DetectionTexture.Load(int3(pixel,0)).r;
+                float weight = max(region - GlintTilePeak[0]*0.08, 0.0) /
+                    (1.0 + 0.09 * float(sx*sx + sy*sy));
+                weightedUV += (float2(pixel) + 0.5) * weight;
+                totalWeight += weight;
+            }
+        }
+        float2 regionCenterUV = totalWeight > 1e-5 ?
+            weightedUV / totalWeight / float2(BrightSize) : GlintTilePosition[0];
+        int2 peakPixel = clamp(int2(GlintTilePosition[0]*float2(BrightSize)),int2(0,0),BrightSize-1);
+        float peakRegion = DetectionTexture.Load(int3(peakPixel,0)).r;
+        // Compact sources stay near the measured HDR peak rather than being
+        // dragged toward an adjacent cloud by the large filtered neighborhood.
+        float compactness = saturate((GlintTilePeak[0] - peakRegion) / max(GlintTilePeak[0],0.1));
+        float2 resultUV = lerp(regionCenterUV, GlintTilePosition[0], compactness);
+        // Candidate.z is the original *unfiltered* HDR peak used for threshold
+        // and intensity; candidate.w is independent region ranking evidence.
+        CandidateOutput[uint2(group.x*2u,group.y)] = float4(resultUV, GlintTilePeak[0], GlintTileScore[0]);
+        // A second raw-peak candidate protects tiny, intense lights when the
+        // region winner in the same tile was a large bright cloud or ground
+        // reflection. Both entries share one 32x32 reduction dispatch.
+        int2 rawPixel = clamp(int2(GlintTileRawPosition[0]*float2(BrightSize)),int2(0,0),BrightSize-1);
+        float rawRegion = DetectionTexture.Load(int3(rawPixel,0)).r;
+        CandidateOutput[uint2(group.x*2u+1u,group.y)] = float4(
+            GlintTileRawPosition[0],GlintTileRawPeak[0],
+            GlintDetectionRank(GlintTileRawPeak[0],rawRegion));
+    }
 }
 
-// Selected source history is two 8-wide rows:
+// Stable source chromaticity must come from raw HDR input, not Bright.rgb.
+// Bright.rgb is thresholded and changes sharply with exposure/TAA reconstruction;
+// using it as an emitter tint produced orange/pink/blue flashes at rest.
+// Only 8 source slots sample this neighborhood (no per-pixel rendering cost).
+float3 GlintSourceHDRTint(float2 normalizedUV, float peak)
+{
+    int2 center = SourceMin + int2(saturate(normalizedUV) * float2(SourceSize));
+    int2 sceneMax = SourceMin + SourceSize - 1;
+    float3 weighted = 0.0;
+    float weightTotal = 0.0;
+    [unroll] for (int y = -2; y <= 2; ++y)
+    [unroll] for (int x = -2; x <= 2; ++x)
+    {
+        int2 samplePixel = clamp(center + int2(x,y), SourceMin, sceneMax);
+        float3 hdr = max(HDRScene.Load(int3(samplePixel,0)).rgb, 0.0);
+        float luminance = GlintLum(hdr);
+        float weight = saturate((luminance - SourceMinBrightness * 0.20)
+            / max(SourceMinBrightness, 0.02));
+        weighted += hdr * weight;
+        weightTotal += weight;
+    }
+    float3 average = weightTotal > 0.0001 ? weighted / weightTotal : float3(1,1,1);
+    float largest = max(max(average.r,average.g),average.b);
+    // Source luminance separately controls overall response. Keep sampled color
+    // a *bounded emitter tint* so a single hot pixel cannot blow out all 32
+    // authored elements or temporally change their opacity.
+    float intensity = min(2.5, 0.20 + 0.45*sqrt(max(peak,0.0)));
+    return average / max(largest, 0.0001) * intensity;
+}
+
+// Only called on missing tiled matches at a stationary viewpoint. If HDR is
+// still present at the old UV, an unrelated brighter tile must not move it.
+float GlintSourceLocalPeak(float2 normalizedUV)
+{
+    int2 center = SourceMin + int2(saturate(normalizedUV) * float2(SourceSize));
+    int2 sceneMax = SourceMin + SourceSize - 1;
+    float peak = 0.0;
+    [unroll] for (int y=-2; y<=2; ++y)
+    [unroll] for (int x=-2; x<=2; ++x)
+    {
+        int2 coord = clamp(center + int2(x,y), SourceMin, sceneMax);
+        peak = max(peak, GlintLum(HDRScene.Load(int3(coord,0)).rgb));
+    }
+    return peak;
+}
+
+// Selected source history is three 8-wide rows:
 //   row 0: normalized UV, HDR peak luminance, confidence (0..1)
 //   row 1: last reliable HDR source RGB (avoids source-color loss when a
 //          threshold or temporal reconstruction temporarily drops a candidate).
+//   row 2: pending replacement UV, challenger rank, consecutive-frame count.
 // Persistence is deliberately short; cuts and view-size changes reset history.
+// Temporal stabilization keeps established sources in their original slots.
+// New sources require the full gate; prior sources use a lower release gate.
+// Both are measured from current HDR. Cached sources fade briefly during a
+// dropout rather than asserting that an occluded source remains visible.
+// Reproject a far-field source from the previous camera into the current
+// unjittered clip frame. Reverse-Z depth 0 represents the infinitely distant
+// direction, so camera translation does not manufacture artificial parallax.
+float2 GlintReprojectSourceUV(float2 previousUV)
+{
+    if (UseSourceReprojection == 0u) return previousUV;
+    float2 previousNDC = float2(previousUV.x*2.0-1.0,1.0-previousUV.y*2.0);
+    float4 currentClip = mul(float4(previousNDC,0.0,1.0),SourcePreviousToCurrentClip);
+    if (currentClip.w <= 1.0e-5) return previousUV;
+    float2 currentUV = float2(0.5 + 0.5*currentClip.x/currentClip.w,
+                               0.5 - 0.5*currentClip.y/currentClip.w);
+    if (any(isnan(currentUV)) || any(abs(currentUV)>4.0)) return previousUV;
+    return currentUV;
+}
+
 [numthreads(1,1,1)]
 void GlintSelectSourcesCS(uint3 id : SV_DispatchThreadID)
 {
     float4 previous[8];
     float3 previousColor[8];
-    bool usedPrevious[8];
+    float4 previousChallenge[8];
+    float4 resolvedChallenge[8];
+    float4 resolved[8];
+    float3 resolvedColor[8];
     [unroll] for (int k = 0; k < 8; ++k)
     {
-        previous[k] = ResetSourceHistory != 0u ? float4(0,0,0,0) : SourceHistory.Load(int3(k,0,0));
-        previousColor[k] = ResetSourceHistory != 0u ? float3(0,0,0) : SourceHistory.Load(int3(k,1,0)).rgb;
-        usedPrevious[k] = false;
+        previous[k] = ResetSourceHistory != 0u ? 0.0 : SourceHistory.Load(int3(k,0,0));
+        previousColor[k] = ResetSourceHistory != 0u ? 0.0 : SourceHistory.Load(int3(k,1,0)).rgb;
+        previousChallenge[k] = ResetSourceHistory != 0u ? 0.0 : SourceHistory.Load(int3(k,2,0));
+        resolvedChallenge[k] = 0.0;
+        resolved[k] = 0.0;
+        resolvedColor[k] = 0.0;
     }
-    float2 selectedUV[8];
-    float selectedLum[8];
-    [unroll] for (int k = 0; k < 8; ++k)
+    float grouping = max(SourceSeparation, SourceGroupingRadius);
+    float motion = saturate(SourceCameraMotion);
+    // At rest, keep the matching neighborhood small. During genuine camera
+    // rotation, expand it so real emitter motion does not lag or disappear.
+    float reacquireRadius = lerp(max(0.024, SourcePositionDeadZone * 4.0), 0.20, motion);
+    float releaseGate = SourceMinBrightness * clamp(SourceHysteresis, 0.25, 1.0);
+    float strongestScore = 0.0;
+    [loop] for (int y=0; y<CandidateSize.y; ++y)
+    [loop] for (int x=0; x<CandidateSize.x; ++x)
     {
-        selectedUV[k] = float2(-100,-100);
-        selectedLum[k] = 0.0;
+        float4 candidate = CandidateTexture.Load(int3(x,y,0));
+        if (candidate.z >= SourceMinBrightness) strongestScore = max(strongestScore, candidate.w);
     }
-    // Rank current candidates by HDR peak while collapsing multiple strong
-    // 32x32 tile maxima from the same large luminous region. This is a screen-
-    // space grouping heuristic, not an actor/light identity system. Artists can
-    // reduce the radius to preserve tightly packed independent lamps.
-    float groupDistance = max(SourceSeparation, SourceGroupingRadius);
-    [loop] for (uint rank = 0u; rank < 8u; ++rank)
+    float acquisitionScoreFloor = strongestScore * saturate(SourceRelativeScoreFloor);
+
+    // First, protect old source slots against tile-rank changes and TAA
+    // brightness jitter. A measured peak down to the release gate is valid.
+    [loop] for (uint slot = 0u; slot < 8u; ++slot)
     {
-        float strongest = SourceMinBrightness;
-        float2 strongestUV = float2(-100,-100);
+        if (slot >= MaxSources) break;
+        if (previous[slot].w <= 0.10) continue;
+        float2 predicted = GlintReprojectSourceUV(previous[slot].xy);
+        float bestDistance = reacquireRadius;
+        float2 measured = predicted;
+        float measuredPeak = 0.0;
+        bool hasMatch = false;
         [loop] for (int y = 0; y < CandidateSize.y; ++y)
         [loop] for (int x = 0; x < CandidateSize.x; ++x)
         {
-            float4 candidate = CandidateTexture.Load(int3(x,y,0));
-            if (candidate.z <= strongest || candidate.w <= 0.0) continue;
-            bool nearChosen = false;
+            float4 c = CandidateTexture.Load(int3(x,y,0));
+            if (c.w <= 0.0 || c.z < releaseGate) continue;
+            float dist = distance(c.xy, predicted);
+            if (dist > reacquireRadius) continue;
+            bool alreadyClaimed = false;
             [unroll] for (int j = 0; j < 8; ++j)
+                if (resolved[j].w > 0.10 && distance(c.xy, resolved[j].xy) < grouping)
+                    alreadyClaimed = true;
+            if (alreadyClaimed) continue;
+            // Nearest plausible candidate wins, not the brightest. A cloud,
+            // specular pixel or TAA reconstruction 100px away may outshine the
+            // original tile for a frame; that is not a source identity change.
+            if (!hasMatch || dist < bestDistance-0.0005 ||
+                (abs(dist-bestDistance) <= 0.0005 && c.z > measuredPeak))
             {
-                if (selectedLum[j] > 0.0 && distance(candidate.xy, selectedUV[j]) < groupDistance)
-                    nearChosen = true;
-            }
-            if (!nearChosen)
-            {
-                strongest = candidate.z;
-                strongestUV = candidate.xy;
+                hasMatch = true;
+                bestDistance = dist;
+                measured = c.xy;
+                measuredPeak = c.z;
             }
         }
-        if (rank < MaxSources && strongestUV.x >= 0.0)
+        if (hasMatch)
         {
-            selectedUV[rank] = strongestUV;
-            selectedLum[rank] = strongest;
+            float dist = distance(measured, predicted);
+            float response = lerp(saturate(SourceSmoothing), 1.0, motion);
+            float2 uv = dist <= SourcePositionDeadZone ? predicted :
+                lerp(predicted, measured, response);
+            float3 tint = GlintSourceHDRTint(measured, measuredPeak);
+            float3 color = lerp(previousColor[slot], tint, lerp(0.08,0.30,motion));
+            float brightness = lerp(previous[slot].z, measuredPeak, 0.18);
+            float confidence = lerp(previous[slot].w, 1.0, 0.25);
+            resolved[slot] = float4(uv, brightness, confidence);
+            resolvedColor[slot] = color;
+        }
+        else
+        {
+            float2 predicted = GlintReprojectSourceUV(previous[slot].xy);
+            float localPeak = motion < 0.08 ? GlintSourceLocalPeak(predicted) : 0.0;
+            if (localPeak >= releaseGate)
+            {
+                // At rest, an existing HDR emitter is more reliable than the
+                // tile maximum selected by the current TAA phase.
+                resolved[slot] = float4(predicted,
+                    lerp(previous[slot].z,localPeak,0.10),
+                    lerp(previous[slot].w,1.0,0.12));
+                resolvedColor[slot] = previousColor[slot];
+            }
+            else if (SourcePersistence > 0.0)
+            {
+                float confidence = previous[slot].w * saturate(SourcePersistence);
+                if (confidence > 0.12)
+                {
+                    resolved[slot] = float4(predicted,
+                        previous[slot].z, confidence);
+                    resolvedColor[slot] = previousColor[slot];
+                }
+            }
         }
     }
 
+    // Fill genuinely free slots only. Never evict an established source
+    // merely because a checkerboard reflection briefly outranks the sun.
+    [loop] for (uint slot = 0u; slot < 8u; ++slot)
+    {
+        if (slot >= MaxSources) break;
+        if (resolved[slot].w > 0.10) continue;
+        float bestPeak = SourceMinBrightness;
+        float bestScore = acquisitionScoreFloor;
+        float2 bestUV = float2(-1,-1);
+        [loop] for (int y = 0; y < CandidateSize.y; ++y)
+        [loop] for (int x = 0; x < CandidateSize.x; ++x)
+        {
+            float4 c = CandidateTexture.Load(int3(x,y,0));
+            if (c.z <= SourceMinBrightness || c.w <= bestScore) continue;
+            bool overlaps = false;
+            [unroll] for (int j = 0; j < 8; ++j)
+                if (resolved[j].w > 0.10 && distance(c.xy, resolved[j].xy) < grouping)
+                    overlaps = true;
+            if (!overlaps)
+            {
+                bestPeak = c.z;
+                bestScore = c.w;
+                bestUV = c.xy;
+            }
+        }
+        if (bestUV.x < 0.0) break;
+        float3 color = GlintSourceHDRTint(bestUV, bestPeak);
+        // Short fade-in keeps single-frame false positives from flashing.
+        resolved[slot] = float4(bestUV,bestPeak,0.55);
+        resolvedColor[slot] = color;
+    }
+    // Saturated budgets must not exclude a bright sun indefinitely. A new
+    // highlight may challenge the globally weakest slot, or the existing
+    // source occupying the *same grouping region* if its peak is substantially
+    // stronger and spatially distinct. This avoids the 0.125-UV grouping radius
+    // allowing a nearby cloud to block the sun forever.
+    int weakestSlot = -1;
+    float weakestScore = 1.0e20;
+    float trackedRanks[8];
+    uint filled = 0u;
+    [loop] for (int k=0; k<8; ++k)
+    {
+        trackedRanks[k] = 0.0;
+        if (uint(k) >= MaxSources || resolved[k].w <= 0.10) continue;
+        ++filled;
+        int2 spot = clamp(int2(resolved[k].xy * float2(BrightSize)), int2(0,0), BrightSize-1);
+        float mean = DetectionTexture.Load(int3(spot,0)).r;
+        float rank = GlintDetectionRank(resolved[k].z, mean) * max(0.25, resolved[k].w);
+        trackedRanks[k] = rank;
+        if (rank < weakestScore) { weakestScore = rank; weakestSlot = k; }
+    }
+    if (filled >= MaxSources && weakestSlot >= 0)
+    {
+        int incomingVictim = -1;
+        float2 incomingUV = float2(-1,-1);
+        float incomingPeak = 0.0;
+        float incomingScore = acquisitionScoreFloor;
+        [loop] for (int y=0; y<CandidateSize.y; ++y)
+        [loop] for (int x=0; x<CandidateSize.x; ++x)
+        {
+            float4 c = CandidateTexture.Load(int3(x,y,0));
+            if (c.z < SourceMinBrightness || c.w <= incomingScore) continue;
+            int overlapSlot = -1;
+            float nearestDistance = 1.0e20;
+            [unroll] for (int j=0; j<8; ++j)
+            {
+                if (uint(j) >= MaxSources || resolved[j].w <= 0.10) continue;
+                float d = distance(c.xy,resolved[j].xy);
+                if (d < grouping && d < nearestDistance)
+                {
+                    nearestDistance = d;
+                    overlapSlot = j;
+                }
+            }
+            // A 1-3px peak wobble is not a competing luminous region. The
+            // threshold here is deliberately larger than the position deadzone.
+            if (overlapSlot >= 0 && nearestDistance <= max(0.025,SourcePositionDeadZone*8.0)) continue;
+            int target = overlapSlot >= 0 ? overlapSlot : weakestSlot;
+            float requiredRank = trackedRanks[target] * max(SourceReplacementRatio,1.05);
+            if (c.w <= requiredRank) continue;
+            incomingUV = c.xy;
+            incomingPeak = c.z;
+            incomingScore = c.w;
+            incomingVictim = target;
+        }
+        if (incomingVictim >= 0)
+        {
+            float4 prev = previousChallenge[incomingVictim];
+            // Challenger state is also screen-space history. Compensate for
+            // camera rotation so a real sun is not seen as a new challenger
+            // on each moving frame and never reaches confirmation.
+            float2 predictedChallenger = GlintReprojectSourceUV(prev.xy);
+            float count = distance(incomingUV,predictedChallenger) < max(0.01,grouping*0.25)
+                ? prev.w + 1.0 : 1.0;
+            if (count >= float(max(SourceReplacementFrames,2u)))
+            {
+                resolved[incomingVictim] = float4(incomingUV,incomingPeak,0.55);
+                resolvedColor[incomingVictim] = GlintSourceHDRTint(incomingUV,incomingPeak);
+            }
+            else
+            {
+                resolvedChallenge[incomingVictim] = float4(incomingUV,incomingScore,count);
+            }
+        }
+    }
     [unroll] for (int k = 0; k < 8; ++k)
     {
-        float4 result = float4(0,0,0,0);
-        float3 resultColor = float3(0,0,0);
-        if (k < int(MaxSources) && selectedLum[k] >= SourceMinBrightness)
-        {
-            float2 measured = selectedUV[k];
-            float2 position = measured;
-            float bestDistance = 0.20; // tolerate rapid camera movement between samples
-            int match = -1;
-            [unroll] for (int prevIndex = 0; prevIndex < 8; ++prevIndex)
-            {
-                if (usedPrevious[prevIndex] || previous[prevIndex].w <= 0.05) continue;
-                float distanceToPrevious = distance(measured, previous[prevIndex].xy);
-                if (distanceToPrevious < bestDistance)
-                {
-                    bestDistance = distanceToPrevious;
-                    match = prevIndex;
-                }
-            }
-            float response = 1.0;
-            if (match >= 0)
-            {
-                usedPrevious[match] = true;
-                // Use the artist's smoothing for tiny movements; catch up quickly
-                // when panning so the ghost follows the actual highlight.
-                response = lerp(saturate(SourceSmoothing), 1.0,
-                                saturate((bestDistance - 0.012) / 0.10));
-                position = lerp(previous[match].xy, measured, response);
-            }
-            int2 brightPixel = clamp(int2(measured * float2(BrightSize)), int2(0,0), BrightSize - int2(1,1));
-            resultColor = max(BrightTexture.Load(int3(brightPixel,0)).rgb, 0.0);
-            if (GlintLum(resultColor) < 0.0001)
-            {
-                // Raw peak still exists but extraction RGB is temporarily
-                // suppressed (motion blur, threshold, temporal reconstruction).
-                // Reuse prior chroma if available or add a very small neutral
-                // seed until a valid processed color is measured again.
-                resultColor = match >= 0 ? previousColor[match]
-                    : float3(0.08,0.08,0.08) * min(selectedLum[k], 3.0);
-            }
-            if (match >= 0)
-                resultColor = lerp(previousColor[match], resultColor, response);
-            result = float4(position, selectedLum[k], 1.0);
-        }
-        else if (k < int(MaxSources) && SourcePersistence > 0.0)
-        {
-            // Recover a previously visible source if a candidate drops for a
-            // frame. Confidence decays geometrically and is never replenished
-            // except by a new *measured* candidate. This is NOT occlusion bypass.
-            float strongestConfidence = 0.12;
-            int keepIndex = -1;
-            [unroll] for (int prevIndex = 0; prevIndex < 8; ++prevIndex)
-            {
-                if (usedPrevious[prevIndex]) continue;
-                float4 oldSource = previous[prevIndex];
-                if (oldSource.w <= strongestConfidence) continue;
-                bool nearNew = false;
-                [unroll] for (int j = 0; j < 8; ++j)
-                {
-                    if (selectedLum[j] > 0.0 && distance(oldSource.xy, selectedUV[j]) < 0.18)
-                        nearNew = true;
-                }
-                if (!nearNew)
-                {
-                    strongestConfidence = oldSource.w;
-                    keepIndex = prevIndex;
-                }
-            }
-            if (keepIndex >= 0)
-            {
-                usedPrevious[keepIndex] = true;
-                result = previous[keepIndex];
-                result.w *= saturate(SourcePersistence);
-                resultColor = previousColor[keepIndex];
-                if (result.w < 0.12) result = float4(0,0,0,0);
-            }
-        }
-        SourcesOutput[int2(k,0)] = result;
-        SourcesOutput[int2(k,1)] = float4(resultColor, 1.0);
+        SourcesOutput[int2(k,0)] = resolved[k];
+        SourcesOutput[int2(k,1)] = float4(resolvedColor[k],1.0);
+        SourcesOutput[int2(k,2)] = resolvedChallenge[k];
     }
 }
 
@@ -558,6 +820,65 @@ float3 GlintEvaluateSourceElement(float2 uv, float4 source, float3 sourceColor, 
     return sourceColor * element.ColorStrength.rgb * (element.ColorStrength.a * shape * energy);
 }
 
+// Cheap optical families generated around *tracked bright regions*, never by
+// mirroring a raster image of the sky. This avoids repeated clouds, checkerboard
+// copies and RGB fan-shaped ghost artifacts in the previous automatic renderer.
+float3 GlintAutomaticSourceOptics(float2 uv)
+{
+    float3 total = 0.0;
+    float aspect = float(BrightSize.x) / max(1.0, float(BrightSize.y));
+    [loop] for (uint slot = 0u; slot < MaxSources; ++slot)
+    {
+        float4 source = SourcePositions.Load(int3(slot,0,0));
+        if (source.w <= 0.12) continue;
+        float edge = min(min(source.x,1.0-source.x),min(source.y,1.0-source.y));
+        float visibility = SourceEdgeFade > 1e-4 ? saturate(edge/SourceEdgeFade) : 1.0;
+        float peakResponse = saturate(source.z/(source.z+2.0));
+        float sourceWeight = source.w * visibility * peakResponse;
+        if (sourceWeight < 1e-4) continue;
+        float3 hdrColor = max(SourcePositions.Load(int3(slot,1,0)).rgb,0.0);
+        float3 tint = hdrColor / max(max(hdrColor.r,max(hdrColor.g,hdrColor.b)),0.15);
+        float2 opticalAxis = source.xy-0.5;
+        if (GhostStrength > 0.0)
+        {
+            [loop] for (uint i=0u; i<GhostCount; ++i)
+            {
+                float rank = float(i)+1.0;
+                float2 center = 0.5-opticalAxis*(GhostSpacing*rank);
+                float2 local = (uv-center)*float2(aspect,1.0);
+                float radius = 0.009 + 0.004*rank;
+                if (dot(local,local) > (radius*2.2)*(radius*2.2)) continue;
+                float chroma = ChromaticShift*0.3*rank;
+                float r0 = length(local);
+                float redR = length(local-float2(chroma,0));
+                float blueR = length(local+float2(chroma,0));
+                float width = max(radius*0.23,0.001);
+                float3 iris = float3(
+                    exp(-pow((redR-radius)/width,2.0)),
+                    exp(-pow((r0-radius)/width,2.0)),
+                    exp(-pow((blueR-radius)/width,2.0)));
+                float disc = exp(-4.5*pow(r0/max(radius,1e-4),2.0));
+                float3 optic = iris*0.57 + disc*0.24;
+                total += optic * tint * (GhostStrength*sourceWeight*0.24/rank);
+            }
+        }
+        if (StreakStrength > 0.0)
+        {
+            // Source-centered anamorphic streak. Its spatial extent is bounded
+            // and attenuated smoothly, unlike copying source pixels across rows.
+            float2 d = (uv-source.xy)*float2(aspect,1.0);
+            float lengthScale = 0.14*max(StreakLength,0.25);
+            if (abs(d.y) < 0.025 && abs(d.x) < lengthScale*4.0)
+            {
+                float core = exp(-abs(d.y)/0.0018) * exp(-abs(d.x)/lengthScale);
+                float halo = exp(-abs(d.y)/0.0075) * exp(-abs(d.x)/(lengthScale*0.52));
+                total += tint * ((0.13*core+0.025*halo)*StreakStrength*sourceWeight);
+            }
+        }
+    }
+    return total;
+}
+
 [numthreads(8,8,1)]
 void GlintGhostCS(uint3 id : SV_DispatchThreadID)
 {
@@ -565,6 +886,11 @@ void GlintGhostCS(uint3 id : SV_DispatchThreadID)
     float2 uv = (float2(id.xy) + 0.5) / float2(BrightSize);
     float2 dir = uv - 0.5;
     float3 ghost = 0.0;
+    float3 streak = 0.0;
+    // Old image warp is diagnostic only. New automatic optics use stable,
+    // source-relative analytical shapes instead of repeated image fragments.
+    if (UseSourceAutomatic == 0u)
+    {
     [loop] for (int i = 0; i < 8; ++i)
     {
         if (i >= int(GhostCount) || GhostStrength <= 0.0) break;
@@ -578,7 +904,6 @@ void GlintGhostCS(uint3 id : SV_DispatchThreadID)
             GlintSampleBright(sampleUV - ca).b);
         ghost += color * edge * (0.20 / (i + 1));
     }
-    float3 streak = 0.0;
     if (StreakStrength > 0.0)
     {
         [unroll] for (int s = -5; s <= 5; ++s)
@@ -588,7 +913,10 @@ void GlintGhostCS(uint3 id : SV_DispatchThreadID)
             streak += GlintSampleBright(sampleUV) * (0.04 / (1.0 + abs(s)));
         }
     }
-    float3 result = ghost * GhostStrength + streak * StreakStrength;
+    }
+    float3 result = UseSourceAutomatic != 0u
+        ? GlintAutomaticSourceOptics(uv)
+        : ghost*GhostStrength + streak*StreakStrength;
     float3 authored = 0.0;
     if (UseSourcePositions != 0u)
     {
@@ -605,13 +933,6 @@ void GlintGhostCS(uint3 id : SV_DispatchThreadID)
             float3 sourceColor = SourcePositions.Load(int3(sourceIndex, 1, 0)).rgb;
             [loop] for (uint e = 0u; e < ElementCount; ++e)
                 authored += GlintEvaluateSourceElement(uv, source, sourceColor, FlareElements[e]);
-            if (DebugSources != 0u)
-            {
-                float2 delta = (uv - source.xy) * float2(BrightSize.x / max(1.0,BrightSize.y),1.0);
-                float cross = (abs(delta.x) < 0.001 && abs(delta.y) < 0.011) ||
-                              (abs(delta.y) < 0.001 && abs(delta.x) < 0.011) ? 1.0 : 0.0;
-                result += float3(0.0, 4.0, 0.7) * cross;
-            }
         }
     }
     else
@@ -653,7 +974,62 @@ void GlintCompositeCS(uint3 id : SV_DispatchThreadID)
         float3 c = (all(p01 >= 0) && all(p01 < BrightSize)) ? FlareTexture.Load(int3(p01, 0)).rgb : float3(0,0,0);
         float3 d = (all(p11 >= 0) && all(p11 < BrightSize)) ? FlareTexture.Load(int3(p11, 0)).rgb : float3(0,0,0);
         float3 flare = lerp(lerp(a,b,fracUV.x),lerp(c,d,fracUV.x),fracUV.y);
-        source.rgb = (DebugBrightPass != 0u) ? flare : (source.rgb + flare * FlareIntensity);
+        // Isolation operates at final composite time only: Extract, source
+        // selection, color tracking and authored optics still use HDRScene.
+        // The resulting image contains Glint plus pure black, never scene RGB.
+        source.rgb = (DebugBrightPass != 0u) ? flare :
+            ((DebugFlareOnly != 0u) ? flare * FlareIntensity : source.rgb + flare * FlareIntensity);
+    }
+    // Debug mode 4 shows the smoothed HDR detection field (not scene blur).
+    // Full-resolution crosses remain overlaid at the selected source UVs.
+    if (DebugSources == 4u && all(pixel >= SourceMin) && all(pixel < SourceMin + SourceSize))
+    {
+        float2 viewUV = (float2(pixel - SourceMin) + 0.5) / float2(SourceSize);
+        int2 DetectionPixel = clamp(int2(viewUV * float2(BrightSize)), int2(0,0), BrightSize-1);
+        float filtered = DetectionTexture.Load(int3(DetectionPixel,0)).r;
+        float visual = saturate(log2(1.0 + filtered) * 0.17);
+        source.rgb = float3(visual,visual,visual);
+    }
+    // Full-resolution, debug-only overlay. Draw AFTER compositing so a source
+    // indicator cannot be confused with an optical element or softened by the
+    // quarter-resolution flare upsample. Black outline survives bright skies.
+    if (DebugSources != 0u && all(pixel >= SourceMin) && all(pixel < SourceMin + SourceSize))
+    {
+        [loop] for (uint sourceIndex = 0u; sourceIndex < MaxSources; ++sourceIndex)
+        {
+            float4 tracked = SourcePositions.Load(int3(sourceIndex, 0, 0));
+            if (tracked.w < 0.001) continue;
+            float2 marker = float2(SourceMin) + tracked.xy * float2(SourceSize);
+            float2 delta = abs((float2(pixel) + 0.5) - marker);
+            bool outline = (delta.x <= 3.5 && delta.y <= 15.5) ||
+                           (delta.y <= 3.5 && delta.x <= 15.5);
+            bool interior = (delta.x <= 1.5 && delta.y <= 12.5) ||
+                            (delta.y <= 1.5 && delta.x <= 12.5);
+            if (outline) source.rgb = float3(0.0, 0.0, 0.0);
+            // Optional confidence diagnostic differentiates a new candidate
+            // from a retained source that is fading after a missed sample.
+            float3 markerColor = float3(8.0, 0.0, 4.0); // magenta: tracked
+            if (DebugSources == 2u)
+            {
+                if (tracked.w < 0.50) markerColor = float3(0.0, 6.0, 7.0); // cyan: retained
+                else if (tracked.w < 0.85) markerColor = float3(8.0, 3.0, 0.0); // amber: new
+            }
+            else if (DebugSources == 3u)
+            {
+                // Persistent source-slot identity, independent of confidence.
+                // If a cross changes color at the same location, it changed
+                // slots; mode 2 alone can conflate that with confidence jitter.
+                if (sourceIndex == 0u) markerColor = float3(8,0,3);
+                else if (sourceIndex == 1u) markerColor = float3(0,7,8);
+                else if (sourceIndex == 2u) markerColor = float3(8,7,0);
+                else if (sourceIndex == 3u) markerColor = float3(2,8,0);
+                else if (sourceIndex == 4u) markerColor = float3(6,2,8);
+                else if (sourceIndex == 5u) markerColor = float3(8,3,0);
+                else if (sourceIndex == 6u) markerColor = float3(0,3,8);
+                else markerColor = float3(8,8,8);
+            }
+            if (interior) source.rgb = markerColor;
+        }
     }
     SceneOutput[pixel] = source;
 }

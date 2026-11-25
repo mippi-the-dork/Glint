@@ -1,3 +1,23 @@
+**Current development handoff (0.8.7.3):** [SM6 candidate + source selection startup fix](99-Dev08-07-03-SM6-Candidate-Source-Selection-Fix.md). Fixes reserved HLSL variable `centroid` and moves `[numthreads(1,1,1)]` onto the source selection compute entry point. Prior 0.8.7.2 C++ build succeeded but SM6 startup failed; new shader startup and all 50 native tests await user validation.
+
+**Current development handoff (0.8.7.2):** [Unjittered projection matrix API compatibility](98-Dev08-07-02-UE58-NoAA-Projection-API.md). The latest user build **succeeded**, including both Glint modules; only `GetProjectionNoAAMatrix()` remained deprecated. This hotfix replaces it with `GetViewToClipNoAA()` without changing source tracking or shaders. UE compilation of the fix, 50 native tests, and visual acceptance remain pending.
+
+**Current development handoff (0.8.7.1):** [UE 5.8 world-to-view API compatibility hotfix](97-Dev08-07-01-UE58-ViewMatrix-API.md). Glint 0.8.7 compiled and linked in the latest user build, with only a deprecated matrix API warning. 0.8.7.1 changes the accessor without modifying tracking behavior; full-project build, 50 native tests, SM6 and manual acceptance still require validation.
+
+# Latest build note
+
+**Current development handoff (0.8.7):** [Protected HDR peaks, temporal camera reprojection, native Lens asset references, and Solo/Delete UI](96-Dev08-07-Peak-Camera-Reprojection-and-UX.md). Last **user-verified** native baseline: **47/47 success** on Glint 0.8.6.1 (Nov 23, 2026). The 0.8.7 update registers **50** tests; Windows C++/SM6, actual Editor controls, sun selection, source motion and GPU cost remain **unverified**. No Unreal Engine modifications or Probe dependency.
+
+- [96: 0.8.7 peak protection, reprojection and editor fixes](96-Dev08-07-Peak-Camera-Reprojection-and-UX.md)
+- [94: 0.8.6 coherent HDR detection and source-slot challenger](94-Dev08-06-Coherent-HDR-Source-Detection.md)
+- [93: 0.8.5.1 UE 5.8 matrix accessor fix](93-Dev08-05-01-View-Matrix-Deprecation-Fix.md)
+- [92: 0.8.5 temporal source identity, color stability and outliner icons](92-Dev08-05-Temporal-Source-Identity.md)
+- [91: 0.8.4.1 FGlintGhostCS startup shader scope fix](91-Dev08-04-01-Shader-Scope-Fix.md)
+
+**Current development handoff (0.8.5):** [Temporal source identity, HDR tint, and current QA](92-Dev08-05-Temporal-Source-Identity.md). Latest **user-verified** baseline: 40/41 native tests in UE5.8.3 on 0.8.4.1 (only ReleaseHysteresis failed). This source revision registers **43** tests and requires a UE compile, native run, and visual acceptance. Pre-revision GPU captures show candidate detection/source selection are ~87% of identified Glint GPU work.
+
+**Current:** [Glint 0.8.1 QA hotfix and measured GPU capture](87-Dev08-01-Manual-QA-Hotfix.md).
+
 > **Latest:** [Glint 0.8.0 Dev08 — release and QA notes](86-Dev08-Release-Notes-and-QA.md), [source grouping/energy](83-Dev08-Source-Grouping-and-HDR-Energy.md), [icon and reset fixes](84-Dev08-Editor-Brushes-and-Reset-Arrows.md), [optical presets/performance](85-Dev08-Optical-Presets-and-Performance.md). **35 Glint automation tests registered; UE5.8.3 build and visual validation pending.**
 
 > **Current source handoff:** [Glint 0.7.0 — Dev07 expanded authoring and editor fixes](80-Dev07-Release-Notes.md) lists this source candidate, known validation limits, and the 29-test suite. See [editor preview details](77-Dev07-Editor-Refresh-and-Preview.md), [optical library](78-Dev07-Optical-Library-and-Presets.md), and [QA checklist](79-Dev07-Manual-QA-and-Automation.md). The older v1 research chapters remain design targets, not declarations of complete features.
@@ -185,3 +205,5 @@ The research in [34](34-Other-Engines-Real-Time-Lens-Flares.md)–[37](37-Cross-
 - [84 — Editor brush icons and Lens reset arrows](84-Dev08-Editor-Brushes-and-Reset-Arrows.md)
 - [85 — Optical presets and performance](85-Dev08-Optical-Presets-and-Performance.md)
 - [86 — Release notes and QA](86-Dev08-Release-Notes-and-QA.md)
+
+- [89 — Dev08.03 Authored Mode Isolation and Black-Background Debug](89-Dev08-03-Authored-Isolation-and-Flare-Diagnostics.md)

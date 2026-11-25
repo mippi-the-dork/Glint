@@ -36,16 +36,51 @@ static TAutoConsoleVariable<int32> CVarGlintAuthored(
     TEXT("r.Glint.Authored"), 1, TEXT("Enable authored elements from the Glint Flare asset."),
     ECVF_RenderThreadSafe);
 static TAutoConsoleVariable<int32> CVarGlintDebugSources(
-    TEXT("r.Glint.DebugSources"), 0, TEXT("Draw source-tracking crosses on the flare field."),
+    TEXT("r.Glint.DebugSources"), 0, TEXT("Source crosses: 0=off; 1=magenta; 2=confidence; 3=stable source slots; 4=filtered detection-luminance diagnostic plus crosses."),
+    ECVF_RenderThreadSafe);
+static TAutoConsoleVariable<int32> CVarGlintDetectionRadius(
+    TEXT("r.Glint.DetectionRadius"), 1, TEXT("HDR detection-only smoothing: 0=off, 1=3x3 (default), 2=5x5. Does not blur the scene or finished flare."),
+    ECVF_RenderThreadSafe | ECVF_Scalability);
+static TAutoConsoleVariable<float> CVarGlintRelativeSourceScore(
+    TEXT("r.Glint.SourceRelativeScoreFloor"), 0.22f, TEXT("Minimum new source score relative to the strongest HDR region in this frame (0..1)."),
+    ECVF_RenderThreadSafe);
+static TAutoConsoleVariable<float> CVarGlintReplacementRatio(
+    TEXT("r.Glint.SourceReplacementRatio"), 1.70f, TEXT("Score advantage required to replace a weaker source when all slots are occupied."),
+    ECVF_RenderThreadSafe);
+static TAutoConsoleVariable<int32> CVarGlintReplacementFrames(
+    TEXT("r.Glint.SourceReplacementFrames"), 3, TEXT("Consecutive frames a stronger source must persist before replacing a tracked slot (2..12)."),
     ECVF_RenderThreadSafe);
 static TAutoConsoleVariable<int32> CVarGlintSourceTracking(
-    TEXT("r.Glint.SourceTracking"), 1, TEXT("Enable GPU source-driven authored elements; 0 uses the older image-field mode."),
+    TEXT("r.Glint.SourceTracking"), 1, TEXT("Enable GPU source-driven authored elements. When disabled, authored drawing is off unless LegacyAuthoredField is enabled."),
     ECVF_RenderThreadSafe);
+// The old image-field renderer warps the HDR scene itself into each optical
+// element. Keep it only for deliberate comparisons; it is not a reliable
+// representation of an authored Glow, Halo, Iris or Ring.
+static TAutoConsoleVariable<int32> CVarGlintLegacyAuthoredField(
+    TEXT("r.Glint.LegacyAuthoredField"), 0, TEXT("Development comparison only: allow the old image-field authored fallback when Source Driven Authored is off."),
+    ECVF_RenderThreadSafe);
+static TAutoConsoleVariable<int32> CVarGlintDebugFlareOnly(
+    TEXT("r.Glint.DebugFlareOnly"), 0, TEXT("Display Glint alone over pure black, without changing the HDR scene used for source sampling."),
+    ECVF_RenderThreadSafe);
+// The legacy automatic mode resamples mirrored copies of the scene. It is
+// useful for A/B screenshots, not for photographic lens ghosts.
+static TAutoConsoleVariable<int32> CVarGlintLegacyAutomaticField(
+    TEXT("r.Glint.LegacyAutomaticField"), 0,
+    TEXT("Diagnostic only: restore the old repeated-image automatic ghosts/streaks. Default 0 uses source-relative optics."),
+    ECVF_RenderThreadSafe);
+static TAutoConsoleVariable<int32> CVarGlintFlareResolutionDivisor(
+    TEXT("r.Glint.FlareResolutionDivisor"), 2, TEXT("Glint flare buffer downsample factor: 1=full, 2=half (default), 4=quarter (original). Larger values are faster but blur small optics."),
+    ECVF_RenderThreadSafe | ECVF_Scalability);
 
 struct FGlintSourceHistory
 {
     TRefCountPtr<IPooledRenderTarget> Previous;
     FIntPoint ViewSize = FIntPoint::ZeroValue;
+    FQuat LastViewRotation = FQuat::Identity;
+    FMatrix LastNoAAViewProjection = FMatrix::Identity;
+    bool bHasNoAAProjection = false;
+    FVector LastViewOrigin = FVector::ZeroVector;
+    bool bHasViewRotation = false;
     uint64 LastUsed = 0;
 };
 
@@ -67,6 +102,7 @@ public:
         SHADER_PARAMETER(FIntPoint, SourceMin)
         SHADER_PARAMETER(FIntPoint, SourceSize)
         SHADER_PARAMETER(FIntPoint, BrightSize)
+        SHADER_PARAMETER(uint32, SampleStride)
         SHADER_PARAMETER(float, BrightThreshold)
         SHADER_PARAMETER(float, KneeWidth)
         SHADER_PARAMETER(float, PeakMix)
@@ -97,15 +133,31 @@ public:
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D, SourcePositions)
         SHADER_PARAMETER(uint32, MaxSources)
         SHADER_PARAMETER(uint32, UseSourcePositions)
-        SHADER_PARAMETER(uint32, DebugSources)
         SHADER_PARAMETER(float, SourceEdgeFade)
         SHADER_PARAMETER(float, SourceGain)
         SHADER_PARAMETER(float, AuthoredEnergyLimit)
+        SHADER_PARAMETER(uint32, UseSourceAutomatic)
     END_SHADER_PARAMETER_STRUCT()
     static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Params)
     { return IsFeatureLevelSupported(Params.Platform, ERHIFeatureLevel::SM5); }
 };
 IMPLEMENT_GLOBAL_SHADER(FGlintGhostCS, "/Plugin/Glint/Private/Glint.usf", "GlintGhostCS", SF_Compute);
+
+class FGlintBuildDetectionCS : public FGlobalShader
+{
+    DECLARE_GLOBAL_SHADER(FGlintBuildDetectionCS);
+    SHADER_USE_PARAMETER_STRUCT(FGlintBuildDetectionCS, FGlobalShader);
+public:
+    BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+        SHADER_PARAMETER_RDG_TEXTURE(Texture2D, BrightTexture)
+        SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float4>, DetectionOutput)
+        SHADER_PARAMETER(FIntPoint, BrightSize)
+        SHADER_PARAMETER(uint32, DetectionRadius)
+    END_SHADER_PARAMETER_STRUCT()
+    static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Params)
+    { return IsFeatureLevelSupported(Params.Platform, ERHIFeatureLevel::SM5); }
+};
+IMPLEMENT_GLOBAL_SHADER(FGlintBuildDetectionCS, "/Plugin/Glint/Private/Glint.usf", "GlintBuildDetectionCS", SF_Compute);
 
 class FGlintFindCandidatesCS : public FGlobalShader
 {
@@ -114,6 +166,7 @@ class FGlintFindCandidatesCS : public FGlobalShader
 public:
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D, BrightTexture)
+        SHADER_PARAMETER_RDG_TEXTURE(Texture2D, DetectionTexture)
         SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float4>, CandidateOutput)
         SHADER_PARAMETER(FIntPoint, BrightSize)
     END_SHADER_PARAMETER_STRUCT()
@@ -129,8 +182,11 @@ class FGlintSelectSourcesCS : public FGlobalShader
 public:
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D, CandidateTexture)
-        SHADER_PARAMETER_RDG_TEXTURE(Texture2D, BrightTexture)
+        SHADER_PARAMETER_RDG_TEXTURE(Texture2D, DetectionTexture)
         SHADER_PARAMETER(FIntPoint, BrightSize)
+        SHADER_PARAMETER_RDG_TEXTURE(Texture2D, HDRScene)
+        SHADER_PARAMETER(FIntPoint, SourceMin)
+        SHADER_PARAMETER(FIntPoint, SourceSize)
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D, SourceHistory)
         SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float4>, SourcesOutput)
         SHADER_PARAMETER(FIntPoint, CandidateSize)
@@ -140,6 +196,14 @@ public:
         SHADER_PARAMETER(float, SourceGroupingRadius)
         SHADER_PARAMETER(float, SourceSmoothing)
         SHADER_PARAMETER(float, SourcePersistence)
+        SHADER_PARAMETER(float, SourceHysteresis)
+        SHADER_PARAMETER(float, SourcePositionDeadZone)
+        SHADER_PARAMETER(float, SourceCameraMotion)
+        SHADER_PARAMETER(FMatrix44f, SourcePreviousToCurrentClip)
+        SHADER_PARAMETER(uint32, UseSourceReprojection)
+        SHADER_PARAMETER(float, SourceRelativeScoreFloor)
+        SHADER_PARAMETER(float, SourceReplacementRatio)
+        SHADER_PARAMETER(uint32, SourceReplacementFrames)
         SHADER_PARAMETER(uint32, ResetSourceHistory)
     END_SHADER_PARAMETER_STRUCT()
     static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Params)
@@ -155,6 +219,7 @@ public:
     BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D, HDRScene)
         SHADER_PARAMETER_RDG_TEXTURE(Texture2D, FlareTexture)
+        SHADER_PARAMETER_RDG_TEXTURE(Texture2D, DetectionTexture)
         SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float4>, SceneOutput)
         SHADER_PARAMETER(FIntPoint, FullSize)
         SHADER_PARAMETER(FIntPoint, SourceMin)
@@ -162,6 +227,10 @@ public:
         SHADER_PARAMETER(FIntPoint, BrightSize)
         SHADER_PARAMETER(float, FlareIntensity)
         SHADER_PARAMETER(uint32, DebugBrightPass)
+        SHADER_PARAMETER(uint32, DebugFlareOnly)
+        SHADER_PARAMETER_RDG_TEXTURE(Texture2D, SourcePositions)
+        SHADER_PARAMETER(uint32, MaxSources)
+        SHADER_PARAMETER(uint32, DebugSources)
     END_SHADER_PARAMETER_STRUCT()
     static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Params)
     { return IsFeatureLevelSupported(Params.Platform, ERHIFeatureLevel::SM5); }
@@ -320,6 +389,8 @@ FScreenPassTexture FGlintSceneViewExtension::AddGlintPass(
             Blended.SourceGroupingRadius = FMath::Lerp(Blended.SourceGroupingRadius, Lens->SourceGroupingRadius, Alpha);
             Blended.SourceSmoothing = FMath::Lerp(Blended.SourceSmoothing, Lens->SourceSmoothing, Alpha);
             Blended.SourcePersistence = FMath::Lerp(Blended.SourcePersistence, Lens->SourcePersistence, Alpha);
+            Blended.SourceHysteresis = FMath::Lerp(Blended.SourceHysteresis, Lens->SourceHysteresis, Alpha);
+            Blended.SourcePositionDeadZone = FMath::Lerp(Blended.SourcePositionDeadZone, Lens->SourcePositionDeadZone, Alpha);
             Blended.SourceEdgeFade = FMath::Lerp(Blended.SourceEdgeFade, Lens->SourceEdgeFade, Alpha);
             Blended.SourceGain = FMath::Lerp(Blended.SourceGain, Lens->SourceGain, Alpha);
             Blended.AuthoredEnergyLimit = FMath::Lerp(Blended.AuthoredEnergyLimit, Lens->AuthoredEnergyLimit, Alpha);
@@ -389,7 +460,8 @@ FScreenPassTexture FGlintSceneViewExtension::AddGlintPass(
         Element.Geometry.Z *= ApertureScale;
     }
     if (Blended.GhostStrength == 0.f && Blended.StreakStrength == 0.f && Elements.IsEmpty() &&
-        CVarGlintDebug.GetValueOnRenderThread() == 0 && CVarGlintDebugSources.GetValueOnRenderThread() == 0)
+        CVarGlintDebug.GetValueOnRenderThread() == 0 && CVarGlintDebugSources.GetValueOnRenderThread() == 0 &&
+        CVarGlintDebugFlareOnly.GetValueOnRenderThread() == 0)
     {
         return Inputs.ReturnUntouchedSceneColorForPostProcessing(GraphBuilder);
     }
@@ -399,7 +471,13 @@ FScreenPassTexture FGlintSceneViewExtension::AddGlintPass(
     if (!Scene.IsValid()) return Scene;
     const FIntPoint ViewSize = Scene.ViewRect.Size();
     if (ViewSize.X < 4 || ViewSize.Y < 4) return Scene;
-    const FIntPoint SmallSize = FIntPoint::DivideAndRoundUp(ViewSize, FIntPoint(4, 4));
+    // The original quarter-resolution buffer visibly pixelated fine Iris,
+    // Ring and aperture elements. Half resolution is now the default; 4 is a
+    // profiling fallback, and 1 is the quality reference.
+    const int32 RequestedDivisor = CVarGlintFlareResolutionDivisor.GetValueOnRenderThread();
+    const int32 SampleStride = RequestedDivisor <= 1 ? 1 : (RequestedDivisor <= 2 ? 2 : 4);
+    const FIntPoint SmallSize = FIntPoint::DivideAndRoundUp(ViewSize,
+        FIntPoint(SampleStride, SampleStride));
     const FRDGTextureDesc SmallDesc = FRDGTextureDesc::Create2D(
         SmallSize, PF_FloatRGBA, FClearValueBinding::Black,
         TexCreate_ShaderResource | TexCreate_UAV);
@@ -412,6 +490,7 @@ FScreenPassTexture FGlintSceneViewExtension::AddGlintPass(
     Extract->SourceMin = Scene.ViewRect.Min;
     Extract->SourceSize = ViewSize;
     Extract->BrightSize = SmallSize;
+    Extract->SampleStride = uint32(SampleStride);
     // UE5 scene color is pre-exposed. Express thresholds in stable scene-linear
     // units to avoid the lens popping with eye adaptation changes.
     const float PreExposure = (View.State && View.State->GetPreExposure() > 0.f)
@@ -427,35 +506,63 @@ FScreenPassTexture FGlintSceneViewExtension::AddGlintPass(
     // Select at most eight bright source locations without GPU -> CPU readback.
     // The first pass finds tile maxima; the second performs bounded source
     // ranking, minimum separation and matches positions to last frame's view.
-    const bool bTrackSources = !Elements.IsEmpty() && Blended.bSourceDrivenAuthored &&
-        CVarGlintSourceTracking.GetValueOnRenderThread() != 0;
+    const EGlintAuthoredRenderMode AuthoredMode = FGlintSourceSelection::ResolveAuthoredMode(
+        !Elements.IsEmpty(), Blended.bSourceDrivenAuthored,
+        CVarGlintSourceTracking.GetValueOnRenderThread() != 0,
+        CVarGlintLegacyAuthoredField.GetValueOnRenderThread() != 0);
+    const bool bTrackSources = AuthoredMode == EGlintAuthoredRenderMode::SourceTracked;
+    const bool bUseLegacyField = AuthoredMode == EGlintAuthoredRenderMode::LegacyImageField;
     const bool bDebugSources = CVarGlintDebugSources.GetValueOnRenderThread() != 0;
-    // Row 0 = UV/brightness/confidence; row 1 = the last reliable HDR source color.
-    const FIntPoint SourceTextureSize(8, 2);
+    FRDGTextureRef DetectionDebugTexture = Bright;
+    // Row 0 = UV/brightness/confidence; row 1 = HDR color; row 2 = challenger evidence.
+    const FIntPoint SourceTextureSize(8, 3);
     const FRDGTextureDesc SourcesDesc = FRDGTextureDesc::Create2D(
         SourceTextureSize, PF_FloatRGBA, FClearValueBinding::Black,
         TexCreate_ShaderResource | TexCreate_UAV);
     FRDGTextureRef Sources = GraphBuilder.CreateTexture(SourcesDesc, TEXT("Glint.Sources"));
     AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(Sources), FLinearColor::Black);
-    if (bTrackSources || bDebugSources)
+    const bool bSourceAutomatic = ((Blended.GhostStrength > 0.f && Blended.GhostCount > 0) ||
+        Blended.StreakStrength > 0.f) &&
+        CVarGlintLegacyAutomaticField.GetValueOnRenderThread() == 0;
+    if (FGlintSourceSelection::RequiresSources(bTrackSources, bSourceAutomatic, bDebugSources))
     {
-        const FIntPoint CandidateSize = FIntPoint::DivideAndRoundUp(SmallSize, FIntPoint(32, 32));
+        // Detection texture retains smoothed HDR luminance separately from the
+        // raw peak channel; final optics still use the unblurred HDR scene.
+        FRDGTextureRef Detection = GraphBuilder.CreateTexture(SmallDesc, TEXT("Glint.Detection"));
+        DetectionDebugTexture = Detection;
+        FGlintBuildDetectionCS::FParameters* Filter = GraphBuilder.AllocParameters<FGlintBuildDetectionCS::FParameters>();
+        Filter->BrightTexture = Bright;
+        Filter->DetectionOutput = GraphBuilder.CreateUAV(Detection);
+        Filter->BrightSize = SmallSize;
+        Filter->DetectionRadius = uint32(FMath::Clamp(CVarGlintDetectionRadius.GetValueOnRenderThread(), 0, 2));
+        FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Glint.BuildDetection"),
+            GetGlobalShaderMap(View.GetFeatureLevel())->GetShader<FGlintBuildDetectionCS>(), Filter,
+            FComputeShaderUtils::GetGroupCount(SmallSize, FIntPoint(8,8)));
+        // Two candidates per tile: strongest coherent region and strongest
+        // untouched HDR peak. A bright sun must not vanish behind a cloud in
+        // the same tile. Source selection receives the doubled candidate width.
+        const FIntPoint CandidateTiles = FIntPoint::DivideAndRoundUp(SmallSize, FIntPoint(32, 32));
+        const FIntPoint CandidateSize(CandidateTiles.X*2, CandidateTiles.Y);
         const FRDGTextureDesc CandidateDesc = FRDGTextureDesc::Create2D(
             CandidateSize, PF_FloatRGBA, FClearValueBinding::Black,
             TexCreate_ShaderResource | TexCreate_UAV);
         FRDGTextureRef Candidates = GraphBuilder.CreateTexture(CandidateDesc, TEXT("Glint.SourceCandidates"));
         FGlintFindCandidatesCS::FParameters* Find = GraphBuilder.AllocParameters<FGlintFindCandidatesCS::FParameters>();
         Find->BrightTexture = Bright;
+        Find->DetectionTexture = Detection;
         Find->CandidateOutput = GraphBuilder.CreateUAV(Candidates);
         Find->BrightSize = SmallSize;
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Glint.FindSourceCandidates"),
             GetGlobalShaderMap(View.GetFeatureLevel())->GetShader<FGlintFindCandidatesCS>(), Find,
-            FIntVector(CandidateSize.X, CandidateSize.Y, 1));
+            FIntVector(CandidateTiles.X, CandidateTiles.Y, 1));
 
         TSharedPtr<FGlintSourceHistory> History;
         FRDGTextureRef Previous = GraphBuilder.CreateTexture(SourcesDesc, TEXT("Glint.PreviousSourcesDefault"));
         AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(Previous), FLinearColor::Black);
         bool bResetHistory = true;
+        float SourceCameraMotion = 1.f; // no temporal history: acquire directly
+        FMatrix44f SourceReprojection = FMatrix44f::Identity;
+        bool bUseSourceReprojection = false;
         if (View.State)
         {
             const FSceneViewStateInterface* ViewKey = View.State;
@@ -463,7 +570,37 @@ FScreenPassTexture FGlintSceneViewExtension::AddGlintPass(
             if (!EntryHistory.IsValid()) EntryHistory = MakeShared<FGlintSourceHistory>();
             History = EntryHistory;
             History->LastUsed = ++HistoryVisitCounter;
-            bResetHistory = View.bCameraCut || History->ViewSize != ViewSize || !History->Previous.IsValid();
+            bResetHistory = FGlintSourceSelection::ShouldResetHistory(
+                History->ViewSize, ViewSize, View.bCameraCut, History->Previous.IsValid());
+            // A changing camera may legitimately move a light tens of pixels
+            // in one frame. When the camera is stationary, large jumps between
+            // GPU tile peaks are almost certainly *not* camera movement.
+            // Use the projection without TAA jitter. Reproject previous source
+            // directions into the current frame before matching candidates;
+            // otherwise a rotating camera appears to teleport every emitter.
+            const FMatrix CurrentNoAAViewProjection =
+                View.ViewMatrices.GetWorldToView() * View.ViewMatrices.GetViewToClipNoAA();
+            if (!bResetHistory && History->bHasNoAAProjection)
+            {
+                SourceReprojection = FMatrix44f(
+                    History->LastNoAAViewProjection.Inverse() * CurrentNoAAViewProjection);
+                bUseSourceReprojection = true;
+            }
+            History->LastNoAAViewProjection = CurrentNoAAViewProjection;
+            History->bHasNoAAProjection = true;
+            const FQuat CurrentViewRotation = View.ViewMatrices.GetViewToWorld().ToQuat();
+            const FVector CurrentViewOrigin = View.ViewMatrices.GetViewOrigin();
+            if (!bResetHistory && History->bHasViewRotation)
+            {
+                const float AngularDelta = float(CurrentViewRotation.AngularDistance(History->LastViewRotation));
+                const float TranslationDelta = float(FVector::Dist(CurrentViewOrigin, History->LastViewOrigin));
+                SourceCameraMotion = FMath::Max(
+                    FGlintSourceSelection::CameraMotionFactor(AngularDelta),
+                    FGlintSourceSelection::CameraTranslationFactor(TranslationDelta));
+            }
+            History->LastViewRotation = CurrentViewRotation;
+            History->LastViewOrigin = CurrentViewOrigin;
+            History->bHasViewRotation = true;
             if (!bResetHistory)
                 Previous = GraphBuilder.RegisterExternalTexture(History->Previous, TEXT("Glint.PreviousSources"));
             History->ViewSize = ViewSize;
@@ -477,8 +614,11 @@ FScreenPassTexture FGlintSceneViewExtension::AddGlintPass(
         }
         FGlintSelectSourcesCS::FParameters* Select = GraphBuilder.AllocParameters<FGlintSelectSourcesCS::FParameters>();
         Select->CandidateTexture = Candidates;
-        Select->BrightTexture = Bright;
+        Select->DetectionTexture = Detection;
         Select->BrightSize = SmallSize;
+        Select->HDRScene = Scene.Texture;
+        Select->SourceMin = Scene.ViewRect.Min;
+        Select->SourceSize = ViewSize;
         Select->SourceHistory = Previous;
         Select->SourcesOutput = GraphBuilder.CreateUAV(Sources);
         Select->CandidateSize = CandidateSize;
@@ -492,6 +632,14 @@ FScreenPassTexture FGlintSceneViewExtension::AddGlintPass(
         Select->SourceGroupingRadius = Blended.SourceGroupingRadius;
         Select->SourceSmoothing = Blended.SourceSmoothing;
         Select->SourcePersistence = Blended.SourcePersistence;
+        Select->SourceHysteresis = Blended.SourceHysteresis;
+        Select->SourcePositionDeadZone = Blended.SourcePositionDeadZone;
+        Select->SourceCameraMotion = SourceCameraMotion;
+        Select->SourcePreviousToCurrentClip = SourceReprojection;
+        Select->UseSourceReprojection = bUseSourceReprojection ? 1u : 0u;
+        Select->SourceRelativeScoreFloor = FMath::Clamp(CVarGlintRelativeSourceScore.GetValueOnRenderThread(), 0.f, 1.f);
+        Select->SourceReplacementRatio = FMath::Clamp(CVarGlintReplacementRatio.GetValueOnRenderThread(), 1.05f, 10.f);
+        Select->SourceReplacementFrames = uint32(FMath::Clamp(CVarGlintReplacementFrames.GetValueOnRenderThread(), 2, 12));
         Select->ResetSourceHistory = bResetHistory ? 1u : 0u;
         FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Glint.SelectAndTrackSources"),
             GetGlobalShaderMap(View.GetFeatureLevel())->GetShader<FGlintSelectSourcesCS>(), Select,
@@ -517,14 +665,17 @@ FScreenPassTexture FGlintSceneViewExtension::AddGlintPass(
     Ghost->StreakLength = Blended.StreakLength;
     Ghost->ChromaticShift = Blended.ChromaticShift;
     Ghost->GhostSpacing = Blended.GhostSpacing;
-    Ghost->ElementCount = uint32(Elements.Num());
+    // Disabling Source Driven Authored must not silently switch to the old
+    // image-field approximation. That renderer can be explicitly re-enabled
+    // for A/B diagnostics using r.Glint.LegacyAuthoredField 1.
+    Ghost->ElementCount = (bTrackSources || bUseLegacyField) ? uint32(Elements.Num()) : 0u;
     Ghost->SourcePositions = Sources;
     Ghost->MaxSources = uint32(FMath::Clamp(FMath::Min(Blended.MaxSources, CVarGlintMaxSources.GetValueOnRenderThread()), 1, 8));
     Ghost->UseSourcePositions = bTrackSources ? 1u : 0u;
-    Ghost->DebugSources = bDebugSources ? 1u : 0u;
     Ghost->SourceEdgeFade = Blended.SourceEdgeFade;
     Ghost->SourceGain = Blended.SourceGain;
     Ghost->AuthoredEnergyLimit = Blended.AuthoredEnergyLimit;
+    Ghost->UseSourceAutomatic = bSourceAutomatic ? 1u : 0u;
     FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Glint.AutomaticAndAuthored"),
         GetGlobalShaderMap(View.GetFeatureLevel())->GetShader<FGlintGhostCS>(), Ghost,
         FComputeShaderUtils::GetGroupCount(SmallSize, FIntPoint(8, 8)));
@@ -536,6 +687,7 @@ FScreenPassTexture FGlintSceneViewExtension::AddGlintPass(
     FGlintCompositeCS::FParameters* Composite = GraphBuilder.AllocParameters<FGlintCompositeCS::FParameters>();
     Composite->HDRScene = Scene.Texture;
     Composite->FlareTexture = CVarGlintDebug.GetValueOnRenderThread() ? Bright : Ghosts;
+    Composite->DetectionTexture = DetectionDebugTexture;
     Composite->SceneOutput = GraphBuilder.CreateUAV(Combined);
     Composite->FullSize = FullDesc.Extent;
     Composite->SourceMin = Scene.ViewRect.Min;
@@ -543,6 +695,10 @@ FScreenPassTexture FGlintSceneViewExtension::AddGlintPass(
     Composite->BrightSize = SmallSize;
     Composite->FlareIntensity = Blended.Intensity * FMath::Min(TotalWeight, 1.f);
     Composite->DebugBrightPass = CVarGlintDebug.GetValueOnRenderThread() ? 1u : 0u;
+    Composite->DebugFlareOnly = CVarGlintDebugFlareOnly.GetValueOnRenderThread() ? 1u : 0u;
+    Composite->SourcePositions = Sources;
+    Composite->MaxSources = Ghost->MaxSources;
+    Composite->DebugSources = uint32(FMath::Clamp(CVarGlintDebugSources.GetValueOnRenderThread(), 0, 4));
     FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("Glint.CompositeHDR"),
         GetGlobalShaderMap(View.GetFeatureLevel())->GetShader<FGlintCompositeCS>(), Composite,
         FComputeShaderUtils::GetGroupCount(FullDesc.Extent, FIntPoint(8, 8)));

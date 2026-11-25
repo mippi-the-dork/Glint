@@ -2,8 +2,13 @@
 #include "GlintLensProfile.h"
 #include "DetailLayoutBuilder.h"
 #include "IDetailPropertyRow.h"
+#include "DetailWidgetRow.h"
 #include "PropertyHandle.h"
 #include "UObject/UnrealType.h"
+#include "Widgets/SBoxPanel.h"
+#include "Widgets/Input/SButton.h"
+#include "Widgets/Images/SImage.h"
+#include "Styling/AppStyle.h"
 
 bool GlintLensDefaults::DiffersFromClassDefault(const UObject* Lens, const FProperty* Property)
 {
@@ -66,14 +71,38 @@ void FGlintLensDetailsCustomization::CustomizeDetails(IDetailLayoutBuilder& Deta
         if (!Property->HasAnyPropertyFlags(CPF_Edit)) continue;
         TSharedRef<IPropertyHandle> Handle = DetailBuilder.GetProperty(Property->GetFName(), UGlintLensProfile::StaticClass());
         if (!Handle->IsValidHandle()) continue;
-        // Edit the EXISTING default property row. Adding a second property row
-        // creates a duplicate whose reset override is not the row shown by the
-        // simple native Data Asset editor (the cause of the missing arrows).
+        // Keep Unreal's default editors for object/class properties. For simple
+        // scalar Lens settings, explicitly place the Reset-to-Class-Default
+        // button next to the existing native value widget. Data Assets can use
+        // themselves as the archetype for Unreal's built-in reset-arrow logic;
+        // an OverrideResetToDefault handler alone is not reliably painted there.
         if (IDetailPropertyRow* Row = DetailBuilder.EditDefaultProperty(Handle))
         {
             Row->OverrideResetToDefault(FResetToDefaultOverride::Create(
                 FIsResetToDefaultVisible::CreateStatic(&ShouldShowReset),
                 FResetToDefaultHandler::CreateStatic(&ResetToLensDefault), false));
+            if (CastField<FNumericProperty>(Property) || CastField<FBoolProperty>(Property))
+            {
+                Row->CustomWidget()
+                    .NameContent()[Handle->CreatePropertyNameWidget()]
+                    .ValueContent().MinDesiredWidth(210.f)
+                    [SNew(SHorizontalBox)
+                        + SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+                            [Handle->CreatePropertyValueWidget()]
+                        + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(3.f,0.f)
+                            [SNew(SButton)
+                                .ButtonStyle(FAppStyle::Get(),TEXT("NoBorder"))
+                                .ContentPadding(0.f)
+                                .Visibility_Lambda([Handle]()
+                                    { // Hidden keeps the right-side slot allocated while scrubbing.
+                                    // Collapsed shortened the numeric field mid-drag.
+                                    return ShouldShowReset(Handle) ? EVisibility::Visible : EVisibility::Hidden; })
+                                .ToolTipText(FText::FromString(TEXT("Reset to Glint Lens class default")))
+                                .OnClicked_Lambda([Handle]()
+                                    { ResetToLensDefault(Handle); return FReply::Handled(); })
+                                [SNew(SImage)
+                                    .Image(FAppStyle::GetBrush(TEXT("PropertyWindow.DiffersFromDefault")))]]];
+            }
         }
     }
 }

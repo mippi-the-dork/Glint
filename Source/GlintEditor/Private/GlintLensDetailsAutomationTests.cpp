@@ -29,4 +29,17 @@ bool FGlintLensResetToDefaultsTest::RunTest(const FString& Parameters)
         GlintLensDefaults::DiffersFromClassDefault(Lens, PersistenceProperty));
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGlintBlendablePickerAssetOnlyTest,
+    "Glint.Editor.Lens.WeightedBlendableAssetReferenceOnly",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FGlintBlendablePickerAssetOnlyTest::RunTest(const FString& Parameters)
+{
+    const UClass* LensClass = UGlintLensProfile::StaticClass();
+    TestFalse(TEXT("Lens is not eligible for inline construction in Weighted Blendables"),
+        LensClass->HasAnyClassFlags(CLASS_EditInlineNew));
+    TestTrue(TEXT("Lens remains a UDataAsset"), LensClass->IsChildOf(UDataAsset::StaticClass()));
+    TestTrue(TEXT("Lens implements IBlendableInterface"),
+        LensClass->ImplementsInterface(UBlendableInterface::StaticClass()));
+    return true;
+}
 #endif

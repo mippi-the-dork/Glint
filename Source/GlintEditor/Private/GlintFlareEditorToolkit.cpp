@@ -1,4 +1,5 @@
 #include "GlintFlareEditorToolkit.h"
+#include <initializer_list>
 #include "GlintElementDetailsProxy.h"
 #include "GlintPreviewSelection.h"
 #include "GlintEditorStyle.h"
@@ -420,6 +421,9 @@ public:
     }
 };
 DECLARE_DELEGATE_TwoParams(FOnGlintReorder,int32,int32);
+// Action rows use SButton::Text directly, like their working element-name
+// buttons. Three previous child painting paths reported valid geometry but
+// appeared blank on the user's actual UE 5.8 editor viewport.
 class SGlintElementGrip final : public SCompoundWidget
 {
 public:
@@ -748,14 +752,11 @@ void FGlintFlareEditorToolkit::RebuildElementList()
               [SNew(SGlintElementGrip).Index(Index)]
             + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(1)
               [SNew(SBox).WidthOverride(24.f).HeightOverride(24.f)
-                [SNew(SButton).ContentPadding(1)
+                [SNew(SButton).ContentPadding(FMargin(0.f)).HAlign(HAlign_Center).VAlign(VAlign_Center)
                   .ToolTipText(FText::FromString(TEXT("Solo element in preview (does not alter asset)")))
                   .ButtonColorAndOpacity(FLinearColor::White)
                   .OnClicked_Lambda([this,Index](){return SoloElement(Index);})
-                  [SNew(SImage).ColorAndOpacity(FLinearColor::White)
-                    .Image(Selection->SoloIndex==Index?
-                        FGlintEditorStyle::Get().GetBrush(TEXT("Glint.Solo.Solid")):
-                        FGlintEditorStyle::Get().GetBrush(TEXT("Glint.Solo.Outline")))]]]
+                  .Text(FText::FromString(TEXT("S")))]]
             + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(2)
               [SNew(SCheckBox)
                 .ToolTipText(FText::FromString(TEXT("Toggle visibility in the asset and at runtime")))
@@ -769,11 +770,10 @@ void FGlintFlareEditorToolkit::RebuildElementList()
                 .OnClicked_Lambda([this,Index](){return SelectElement(Index);})]
             + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(1)
               [SNew(SBox).WidthOverride(24.f).HeightOverride(24.f)
-                [SNew(SButton).ContentPadding(1)
+                [SNew(SButton).ContentPadding(FMargin(0.f)).HAlign(HAlign_Center).VAlign(VAlign_Center)
                   .ToolTipText(FText::FromString(TEXT("Delete this element (Undo supported)")))
                   .OnClicked_Lambda([this,Index](){return RemoveElement(Index);})
-                  [SNew(SImage).ColorAndOpacity(FLinearColor::White)
-                    .Image(FGlintEditorStyle::Get().GetBrush(TEXT("Glint.Icon.Trash")))]]]]];
+                  .Text(FText::FromString(TEXT("X")))]]]];
     }
     if (Canvas.IsValid()) Canvas->Invalidate(EInvalidateWidgetReason::Paint);
 }
@@ -1039,3 +1039,27 @@ void FGlintFlareEditorToolkit::LoadPreviewSettings()
     UpdateBackgroundAspect(false);
 }
 void FGlintFlareEditorToolkit::RequestListRefresh() { RebuildElementList(); }
+
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGlintOutlinerActionGlyphGeometryTest,
+    "Glint.Editor.Outliner.ActionGlyphGeometry",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FGlintOutlinerActionGlyphGeometryTest::RunTest(const FString& Parameters)
+{
+    // Layout-only smoke test. Live Slate visibility still requires manual QA.
+    const TSharedRef<SWidget> SoloWidget = SNew(SBox).WidthOverride(24.f).HeightOverride(24.f)
+        [SNew(SButton).ContentPadding(FMargin(0.f))
+            .Text(FText::FromString(TEXT("S")))];
+    const TSharedRef<SWidget> DeleteWidget = SNew(SBox).WidthOverride(24.f).HeightOverride(24.f)
+        [SNew(SButton).ContentPadding(FMargin(0.f))
+            .Text(FText::FromString(TEXT("X")))];
+    SoloWidget->SlatePrepass(1.f);
+    DeleteWidget->SlatePrepass(1.f);
+    TestTrue(TEXT("Solo action reserves 24 logical pixels"),
+        FMath::IsNearlyEqual(SoloWidget->GetDesiredSize().X,24.f));
+    TestTrue(TEXT("Delete action reserves 24 logical pixels"),
+        FMath::IsNearlyEqual(DeleteWidget->GetDesiredSize().X,24.f));
+    return true;
+}
+#endif
