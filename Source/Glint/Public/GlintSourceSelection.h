@@ -44,6 +44,16 @@ struct GLINT_API FGlintSourceSelection
     /** Shader-equivalent rank: raw HDR peak plus coherent, smoothed luminance.
         No scene/flare image is blurred; rank is distinct from brightness gate. */
     static float CalculateDetectionRank(float RawPeak, float FilteredLuminance);
+    /** Live-HDR gate for the camera-projected atmosphere sun. A default
+        atmosphere direction without an actual light must never produce a source. */
+    static bool ShouldAcceptAtmosphereSun(float Peak, float Background,
+        float AcquisitionGate, bool bAtmosphereLightPresent);
+    /** Compact HDR peaks receive source-specific grouping, avoiding a broad
+        cloud merging a separate sun disk into its source slot. */
+    static float CalculateCompactGroupingRadius(float Peak, float FilteredLuminance,
+        float MinimumDistance, float BroadGroupingRadius);
+    /** Predicted source position correction must remain bounded during fast motion. */
+    static float CalculateTrackingResponse(float SourceSmoothing, float CameraMotion);
     /** Low-resolution HDR luminance filter, CPU reference for the detection shader.
         Edges discard off-image samples instead of repeating bright border pixels. */
     static float FilterDetectionLuminance(const TArray<float>& Grid, FIntPoint Size,

@@ -44,6 +44,9 @@ float SourcePositionDeadZone;
 float SourceCameraMotion;
 float4x4 SourcePreviousToCurrentClip;
 uint UseSourceReprojection;
+float4x4 SourceSunWorldToClipNoAA;
+uint AtmosphereSunMode;
+uint AtmosphereLightIndex;
 float SourceRelativeScoreFloor;
 float SourceReplacementRatio;
 uint SourceReplacementFrames;
@@ -350,6 +353,72 @@ float2 GlintReprojectSourceUV(float2 previousUV)
     return currentUV;
 }
 
+// Very bright, compact sources need a smaller grouping radius than broad
+// cloud/terrain regions. The old global 0.125 UV grouping radius could suppress
+// a sun disk even when five or more source slots were still unoccupied.
+float GlintCandidateGroupingRadius(float2 uv, float peak, float broadRadius)
+{
+    int2 spot = clamp(int2(uv * float2(BrightSize)), int2(0,0), BrightSize-1);
+    float filtered = DetectionTexture.Load(int3(spot,0)).r;
+    float compactness = saturate((peak - filtered) / max(peak, 0.1));
+    float compactWeight = smoothstep(0.25, 0.65, compactness);
+    return lerp(broadRadius, SourceSeparation, compactWeight);
+}
+
+// Sky Atmosphere's directional-light index 0 is the deterministic sun anchor.
+// Projection uses an infinite-distance direction (w=0), so translations of the
+// camera do not induce false parallax. These view-uniform fields are supplied
+// by UE 5.8's render thread and must not be fabricated from candidate maxima.
+bool GlintProjectAtmosphereSun(out float2 sunUV)
+{
+    sunUV = float2(-1.0,-1.0);
+    if (AtmosphereSunMode == 0u) return false;
+    float3 sunIlluminance = AtmosphereLightIndex == 0u
+        ? View.AtmosphereLightIlluminanceOuterSpace[0].rgb
+        : View.AtmosphereLightIlluminanceOuterSpace[1].rgb;
+    // UE can provide a default direction without an actual atmosphere light.
+    // Its zero illuminance must never spawn a phantom sun.
+    if (max(sunIlluminance.r,max(sunIlluminance.g,sunIlluminance.b)) <= 1.0e-5)
+        return false;
+    float3 sunDirection = AtmosphereLightIndex == 0u
+        ? View.AtmosphereLightDirection[0].xyz
+        : View.AtmosphereLightDirection[1].xyz;
+    float dirSquared = dot(sunDirection,sunDirection);
+    if (dirSquared < 0.1) return false;
+    float4 sunClip = mul(float4(sunDirection * rsqrt(dirSquared),0.0), SourceSunWorldToClipNoAA);
+    if (sunClip.w <= 1.0e-5) return false;
+    sunUV = float2(0.5 + 0.5 * sunClip.x / sunClip.w,
+                   0.5 - 0.5 * sunClip.y / sunClip.w);
+    return all(sunUV >= float2(0.0,0.0)) && all(sunUV <= float2(1.0,1.0));
+}
+
+// Validate sunlight against live (pre-exposed) HDR from the CURRENT frame.
+// The center sample is allowed a few reduced pixels of uncertainty, but the
+// optical center remains the deterministic camera-projected direction.
+// A diffuse cloud has a much less compact peak/background relationship.
+bool GlintValidateAtmosphereSun(float2 sunUV, out float sunPeak)
+{
+    int2 center = clamp(int2(sunUV * float2(BrightSize)),int2(0,0),BrightSize-1);
+    sunPeak = 0.0;
+    [unroll] for (int y=-3; y<=3; ++y)
+    [unroll] for (int x=-3; x<=3; ++x)
+    {
+        int2 samplePixel = clamp(center+int2(x,y),int2(0,0),BrightSize-1);
+        sunPeak = max(sunPeak,DetectionTexture.Load(int3(samplePixel,0)).g);
+    }
+    const int2 offsets[8] = {
+        int2(-8,0),int2(8,0),int2(0,-8),int2(0,8),
+        int2(-6,-6),int2(6,-6),int2(-6,6),int2(6,6)
+    };
+    float background = 0.0;
+    [unroll] for (int i=0;i<8;++i)
+    {
+        int2 samplePixel = clamp(center+offsets[i],int2(0,0),BrightSize-1);
+        background += DetectionTexture.Load(int3(samplePixel,0)).r * 0.125;
+    }
+    return sunPeak >= max(SourceMinBrightness * 1.20, background * 1.35);
+}
+
 [numthreads(1,1,1)]
 void GlintSelectSourcesCS(uint3 id : SV_DispatchThreadID)
 {
@@ -372,7 +441,10 @@ void GlintSelectSourcesCS(uint3 id : SV_DispatchThreadID)
     float motion = saturate(SourceCameraMotion);
     // At rest, keep the matching neighborhood small. During genuine camera
     // rotation, expand it so real emitter motion does not lag or disappear.
-    float reacquireRadius = lerp(max(0.024, SourcePositionDeadZone * 4.0), 0.20, motion);
+    // The predicted position already compensates for camera rotation. A 20%-of-screen
+    // match radius allowed unrelated clouds to steal an emitter during motion.
+    // Near-field translation without depth may reacquire after a brief fade.
+    float reacquireRadius = lerp(max(0.020, SourcePositionDeadZone * 4.0), 0.060, motion);
     float releaseGate = SourceMinBrightness * clamp(SourceHysteresis, 0.25, 1.0);
     float strongestScore = 0.0;
     [loop] for (int y=0; y<CandidateSize.y; ++y)
@@ -383,11 +455,44 @@ void GlintSelectSourcesCS(uint3 id : SV_DispatchThreadID)
     }
     float acquisitionScoreFloor = strongestScore * saturate(SourceRelativeScoreFloor);
 
+    // A sky sun may share a tile or grouping region with a cloud. Do NOT make
+    // it compete for that region's candidate slot: use the projected sky-light
+    // direction and require independent live HDR evidence of the visible disk.
+    // Slot zero is stable by design; other detected sources use slots 1..7.
+    float2 skySunUV = float2(-1.0,-1.0);
+    if (GlintProjectAtmosphereSun(skySunUV))
+    {
+        float skySunPeak = 0.0;
+        bool visibleSun = GlintValidateAtmosphereSun(skySunUV,skySunPeak);
+        if (visibleSun || AtmosphereSunMode == 2u)
+        {
+            skySunPeak = max(skySunPeak, SourceMinBrightness);
+            float confidence = previous[0].w > 0.10 &&
+                distance(previous[0].xy,skySunUV) < 0.12
+                ? min(1.0, previous[0].w + 0.18) : 0.60;
+            resolved[0] = float4(skySunUV,skySunPeak,confidence);
+            resolvedColor[0] = GlintSourceHDRTint(skySunUV,skySunPeak);
+        }
+        else if (previous[0].w > 0.10 &&
+            distance(GlintReprojectSourceUV(previous[0].xy),skySunUV) < 0.08)
+        {
+            // A real sun temporarily behind a cloud fades rather than
+            // teleporting to the next ranked ground reflection.
+            float confidence = previous[0].w * saturate(SourcePersistence);
+            if (confidence > 0.12)
+            {
+                resolved[0] = float4(skySunUV,previous[0].z,confidence);
+                resolvedColor[0] = previousColor[0];
+            }
+        }
+    }
+
     // First, protect old source slots against tile-rank changes and TAA
     // brightness jitter. A measured peak down to the release gate is valid.
     [loop] for (uint slot = 0u; slot < 8u; ++slot)
     {
         if (slot >= MaxSources) break;
+        if (resolved[slot].w > 0.10) continue; // reserved validated atmospheric sun
         if (previous[slot].w <= 0.10) continue;
         float2 predicted = GlintReprojectSourceUV(previous[slot].xy);
         float bestDistance = reacquireRadius;
@@ -402,8 +507,9 @@ void GlintSelectSourcesCS(uint3 id : SV_DispatchThreadID)
             float dist = distance(c.xy, predicted);
             if (dist > reacquireRadius) continue;
             bool alreadyClaimed = false;
+            const float candidateGrouping = GlintCandidateGroupingRadius(c.xy, c.z, grouping);
             [unroll] for (int j = 0; j < 8; ++j)
-                if (resolved[j].w > 0.10 && distance(c.xy, resolved[j].xy) < grouping)
+                if (resolved[j].w > 0.10 && distance(c.xy, resolved[j].xy) < candidateGrouping)
                     alreadyClaimed = true;
             if (alreadyClaimed) continue;
             // Nearest plausible candidate wins, not the brightest. A cloud,
@@ -421,7 +527,9 @@ void GlintSelectSourcesCS(uint3 id : SV_DispatchThreadID)
         if (hasMatch)
         {
             float dist = distance(measured, predicted);
-            float response = lerp(saturate(SourceSmoothing), 1.0, motion);
+            // Camera reprojection carries expected motion. Do not snap all the way to
+            // a different tile peak just because the camera is rotating.
+            float response = clamp(SourceSmoothing, 0.08, 0.55);
             float2 uv = dist <= SourcePositionDeadZone ? predicted :
                 lerp(predicted, measured, response);
             float3 tint = GlintSourceHDRTint(measured, measuredPeak);
@@ -472,8 +580,9 @@ void GlintSelectSourcesCS(uint3 id : SV_DispatchThreadID)
             float4 c = CandidateTexture.Load(int3(x,y,0));
             if (c.z <= SourceMinBrightness || c.w <= bestScore) continue;
             bool overlaps = false;
+            const float candidateGrouping = GlintCandidateGroupingRadius(c.xy, c.z, grouping);
             [unroll] for (int j = 0; j < 8; ++j)
-                if (resolved[j].w > 0.10 && distance(c.xy, resolved[j].xy) < grouping)
+                if (resolved[j].w > 0.10 && distance(c.xy, resolved[j].xy) < candidateGrouping)
                     overlaps = true;
             if (!overlaps)
             {
@@ -525,7 +634,7 @@ void GlintSelectSourcesCS(uint3 id : SV_DispatchThreadID)
             {
                 if (uint(j) >= MaxSources || resolved[j].w <= 0.10) continue;
                 float d = distance(c.xy,resolved[j].xy);
-                if (d < grouping && d < nearestDistance)
+                if (d < GlintCandidateGroupingRadius(c.xy, c.z, grouping) && d < nearestDistance)
                 {
                     nearestDistance = d;
                     overlapSlot = j;

@@ -15,6 +15,14 @@ float FGlintSourceSelection::CalculatePeakGate(float MinimumSourceBrightness, fl
         * FMath::Max(0.001f, PreExposure);
 }
 
+bool FGlintSourceSelection::ShouldAcceptAtmosphereSun(float Peak, float Background,
+    float AcquisitionGate, bool bAtmosphereLightPresent)
+{
+    return bAtmosphereLightPresent && FMath::IsFinite(Peak) && FMath::IsFinite(Background)
+        && Peak >= FMath::Max(FMath::Max(AcquisitionGate, 0.f) * 1.20f,
+                              FMath::Max(Background, 0.f) * 1.35f);
+}
+
 bool FGlintSourceSelection::ShouldResetHistory(FIntPoint PreviousViewSize,
     FIntPoint CurrentViewSize, bool bCameraCut, bool bHasHistory)
 {
@@ -60,6 +68,23 @@ float FGlintSourceSelection::CalculateDetectionRank(float RawPeak, float Filtere
     const float Region = FMath::Max(0.f, FilteredLuminance);
     const float Contrast = FMath::Clamp((Peak - Region) / FMath::Max(Region, 0.1f), 0.f, 1.f);
     return FMath::Sqrt(Peak) * (0.65f + 1.65f * Contrast) + 0.30f * FMath::Sqrt(Region);
+}
+
+float FGlintSourceSelection::CalculateCompactGroupingRadius(float Peak, float FilteredLuminance,
+    float MinimumDistance, float BroadGroupingRadius)
+{
+    const float Contrast = FMath::Clamp((FMath::Max(0.f, Peak) - FMath::Max(0.f, FilteredLuminance))
+        / FMath::Max(Peak, 0.1f), 0.f, 1.f);
+    const float T = FMath::Clamp((Contrast - 0.25f) / 0.40f, 0.f, 1.f);
+    const float Weight = T*T*(3.f - 2.f*T);
+    return FMath::Lerp(BroadGroupingRadius, MinimumDistance, Weight);
+}
+
+float FGlintSourceSelection::CalculateTrackingResponse(float SourceSmoothing, float /*CameraMotion*/)
+{
+    // Camera motion is captured by screen-space reprojection, not by snapping
+    // to a different nearby HDR candidate. Preserve smoothing in all cases.
+    return FMath::Clamp(SourceSmoothing, 0.08f, 0.55f);
 }
 
 float FGlintSourceSelection::FilterDetectionLuminance(const TArray<float>& Grid,
@@ -174,7 +199,7 @@ TArray<FGlintSourcePoint> FGlintSourceSelection::StabilizeHysteresis(
     const int32 Cap = FMath::Clamp(MaxSources, 0, 8);
     const float ReleaseGate = CalculateReleaseGate(AcquireGate, Hysteresis);
     const float Motion = FMath::Clamp(CameraMotion, 0.f, 1.f);
-    const float MotionRadius = FMath::Lerp(0.024f, 0.2f, Motion);
+    const float MotionRadius = FMath::Lerp(0.020f, 0.060f, Motion);
     TArray<bool> Used;
     Used.Init(false, Detected.Num());
     if (!bCameraCut)
@@ -203,8 +228,7 @@ TArray<FGlintSourcePoint> FGlintSourceSelection::StabilizeHysteresis(
                 const FGlintSourcePoint& Current = Detected[Best];
                 FGlintSourcePoint Held = Old;
                 const float Distance = FMath::Sqrt(FVector2f::DistSquared(Old.UV, Current.UV));
-                const float Response = FMath::Lerp(FMath::Clamp(PositionResponse, 0.f, 1.f),
-                    1.f, Motion);
+                const float Response = CalculateTrackingResponse(PositionResponse, Motion);
                 if (Distance > PositionDeadZone)
                     Held.UV = FMath::Lerp(Old.UV, Current.UV, Response);
                 Held.Brightness = FMath::Lerp(Old.Brightness, Current.Brightness, 0.25f);

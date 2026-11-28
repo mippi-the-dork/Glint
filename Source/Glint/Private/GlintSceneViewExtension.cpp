@@ -50,6 +50,19 @@ static TAutoConsoleVariable<float> CVarGlintReplacementRatio(
 static TAutoConsoleVariable<int32> CVarGlintReplacementFrames(
     TEXT("r.Glint.SourceReplacementFrames"), 3, TEXT("Consecutive frames a stronger source must persist before replacing a tracked slot (2..12)."),
     ECVF_RenderThreadSafe);
+// Use the projected atmospheric light direction as a stable sun anchor, but
+// require an actual visible HDR disk before giving it a tracked source slot.
+// Mode 2 forces a projection for diagnosis only, not normal game rendering.
+static TAutoConsoleVariable<int32> CVarGlintAtmosphereSource(
+    TEXT("r.Glint.AtmosphereSource"), 1,
+    TEXT("Sky Atmosphere sun source: 0=HDR candidates only, 1=HDR-validated sky sun (default), 2=force sun anchor for projection diagnosis only."),
+    ECVF_RenderThreadSafe);
+// Sky Atmosphere supports two atmospheric light slots. Index 0 is the usual sun;
+// projects may intentionally place their main visible sun at index 1.
+static TAutoConsoleVariable<int32> CVarGlintAtmosphereLightIndex(
+    TEXT("r.Glint.AtmosphereLightIndex"), 0,
+    TEXT("Atmospheric directional light to anchor (0=default sun, 1=secondary atmosphere light)."),
+    ECVF_RenderThreadSafe);
 static TAutoConsoleVariable<int32> CVarGlintSourceTracking(
     TEXT("r.Glint.SourceTracking"), 1, TEXT("Enable GPU source-driven authored elements. When disabled, authored drawing is off unless LegacyAuthoredField is enabled."),
     ECVF_RenderThreadSafe);
@@ -201,6 +214,11 @@ public:
         SHADER_PARAMETER(float, SourceCameraMotion)
         SHADER_PARAMETER(FMatrix44f, SourcePreviousToCurrentClip)
         SHADER_PARAMETER(uint32, UseSourceReprojection)
+        // Engine-provided atmospheric sunlight direction and illuminance.
+        SHADER_PARAMETER_STRUCT_REF(FViewUniformShaderParameters, View)
+        SHADER_PARAMETER(FMatrix44f, SourceSunWorldToClipNoAA)
+        SHADER_PARAMETER(uint32, AtmosphereSunMode)
+        SHADER_PARAMETER(uint32, AtmosphereLightIndex)
         SHADER_PARAMETER(float, SourceRelativeScoreFloor)
         SHADER_PARAMETER(float, SourceReplacementRatio)
         SHADER_PARAMETER(uint32, SourceReplacementFrames)
@@ -637,6 +655,13 @@ FScreenPassTexture FGlintSceneViewExtension::AddGlintPass(
         Select->SourceCameraMotion = SourceCameraMotion;
         Select->SourcePreviousToCurrentClip = SourceReprojection;
         Select->UseSourceReprojection = bUseSourceReprojection ? 1u : 0u;
+        Select->View = View.ViewUniformBuffer;
+        Select->SourceSunWorldToClipNoAA = FMatrix44f(
+            View.ViewMatrices.GetWorldToView() * View.ViewMatrices.GetViewToClipNoAA());
+        Select->AtmosphereSunMode = uint32(FMath::Clamp(
+            CVarGlintAtmosphereSource.GetValueOnRenderThread(), 0, 2));
+        Select->AtmosphereLightIndex = uint32(FMath::Clamp(
+            CVarGlintAtmosphereLightIndex.GetValueOnRenderThread(), 0, 1));
         Select->SourceRelativeScoreFloor = FMath::Clamp(CVarGlintRelativeSourceScore.GetValueOnRenderThread(), 0.f, 1.f);
         Select->SourceReplacementRatio = FMath::Clamp(CVarGlintReplacementRatio.GetValueOnRenderThread(), 1.05f, 10.f);
         Select->SourceReplacementFrames = uint32(FMath::Clamp(CVarGlintReplacementFrames.GetValueOnRenderThread(), 2, 12));

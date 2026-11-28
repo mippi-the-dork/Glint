@@ -59,7 +59,7 @@ struct GLINT_API FGlintLensBlendData
 /** Assign to a camera or Post Process Volume through Weighted Blendables. */
 // A lens is a Content Browser asset. UDataAsset inherits EditInlineNew, which
 // incorrectly adds a Create New choice inside Post Process Weighted Blendables.
-UCLASS(BlueprintType, NotEditInlineNew)
+UCLASS(BlueprintType, NotEditInlineNew, HideDropdown)
 class GLINT_API UGlintLensProfile : public UDataAsset, public IBlendableInterface
 {
     GENERATED_BODY()

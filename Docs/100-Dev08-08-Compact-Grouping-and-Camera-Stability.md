@@ -1,0 +1,37 @@
+# Glint Dev08.08 | Compact HDR Source Grouping & Camera Stability
+
+Version: 0.8.8 (UE 5.8.x / Win64). **Native Unreal build, SM6 startup, manual visual paint, and GPU regression are pending.** This pass is a targeted hypothesis-driven correction, not a verified sun/rotation fix.
+
+## User evidence (2026-11-26)
+
+- UE 5.8.3 starts with 0.8.7.3, and all **50/50** Glint native automation tests pass.
+- A bright-pass screenshot clearly shows the sun. Tracked debug crosses instead land on nearby cloud and distant checkerboard ground highlights. The screenshot shows unused source slots, so the limit of eight is **not necessarily** the reason the sun is excluded.
+- Source markers continue to jitter/occasionally jump with camera motion. Solo and Delete actions still paint empty gray controls even after three separate Slate image/button/text implementations. The **Post Process Materials > Choose** menu still offers an inline `Glint Lens Profile` type and `Asset Reference` despite `NotEditInlineNew` reflection tests passing.
+- Captures: `ProjectHeavyWater-58902052-2026.11.26-00.16.53.profViz` (Glint on, captured frame **8.2291 ms**) and `...00.17.15.profViz` (Glint off, **6.9662 ms**). Single frame difference = **1.2629 ms**, not a sustained benchmark. The Glint-on pass timings using the root-frame scale are: Extract ~0.0051 ms; Source clear ~0.0225 ms; BuildDetection ~0.0307 ms; FindSourceCandidates ~0.3707 ms; SelectAndTrackSources ~0.1700 ms; AutomaticAndAuthored ~0.0307 ms; CompositeHDR ~0.0174 ms. Sum ~0.6471 ms. Do not assign the full on/off difference to just these passes.
+
+## Root-cause hypotheses and changes
+
+1. **Sun merged with an unrelated cloud source.** Source grouping was globally `max(SourceSeparation=0.04, SourceGroupingRadius=0.125)` in normalized UV. A sun and adjacent cloud within 0.125 UV were treated as one region even if multiple source slots were free. Added `GlintCandidateGroupingRadius`: based on the difference between the original HDR peak and spatially filtered detection luminance, smoothly shrinks grouping from the broad 0.125 toward the minimum 0.04 for compact sources. Used when matching and filling new slots, and evaluating nearby challengers. Broad clouds still merge normally. Does not give semantic knowledge of the sun, and a diffuse sun/brightest cloud could still rank incorrectly.
+2. **Moving-camera tile snapping.** Tracking already predicts location using unjittered camera reprojection. But it then expanded the candidate search to 0.20 normalized UV at maximum camera motion, and blended fully to any nearest candidate (`response=1`). That explains jumps even with a valid projection. Bounded the search to 0.06 and source correction to 0.08..0.55, with the usual lens smoothing of 0.35. In a genuine near-field parallax case this can fade/reacquire instead of jumping. Source confidence, HDR color and release behavior remain intact.
+3. **Invisible action buttons.** The drag handle's `SImage` paints correctly. Created a simple `SGlintElementAction` that owns its **direct** `SImage` with native icon brushes, handles mouse capture/up itself, and uses the same stable raw image rendering path as the drag grip. The actual action widget replaces the `SButton` child and is constructed by the native `ActionGlyphGeometry` smoke test (not a fabricated different SButton). This still requires user visual confirmation, as automation cannot guarantee Slate paint pixels.
+4. **Post Process Volume `Choose` menu:** No change in this pass. Unreal's **native Weighted Blendables** menu offers in-place blendable object types along with `Asset Reference` for objects implementing `IBlendableInterface`. `NotEditInlineNew` is insufficient to remove that type entry in UE 5.8. Removing the native entry may require a custom property-type/details layout that affects other blendables, or breaking the existing interface. Neither is acceptable as a blind hotfix. Continue using `Asset Reference` until a scoped customization is researched and live-tested. No engine modifications.
+
+## Automated QA
+
+- Native test total: **51** (50 prior + `Glint.Source.Detection.CompactGroupingSun`). The new test checks compact-vs-broad grouping separation and bounded motion correction.
+- Source checks: `python Plugins/Glint/Tools/CheckDev088Source.py`, `CheckShaderContracts.py`, `CheckDev0873ShaderGuards.py`, and historical `Tools/Check*.py`.
+- Static source checks DO NOT compile global shaders, C++ or verify painting and GPU motion. User must rebuild and run `Automation RunTests Glint`.
+
+## Manual QA (exact acceptance)
+
+1. Replace the **entire** `ProjectHeavyWater/Plugins/Glint` directory with the ZIP's top-level `Glint` directory, restart the Unreal Editor and build `ProjectHeavyWaterEditor` Win64 Development. Launch with PCD3D_SM6; report complete compilation/shader errors if any.
+2. Open Output Log: `Tools > Debug > Output Log`. Execute `Automation RunTests Glint`. Expected **51/51 Success**; report failed test names and full assertion text otherwise.
+3. In your established sunny scene, with the Post Process Volume's existing Glint Lens asset assigned through `Post Process Materials > Asset Reference`, set `r.Glint.DebugSources 3` (or `4` to inspect HDR detection). Keep your prior exposure and detection settings. The sun should now acquire its **own marker** even when a cloud highlight is within roughly 0.125 UV, provided it meets the HDR acquisition gate. Record stationary frames; if still missing, report `MaxSources`, `SourceSeparation`, `SourceGroupingRadius`, `Threshold`, and `SourceMinBrightness` from your Lens and a screenshot of both debug modes.
+4. With `r.Glint.DebugSources 3`, rotate 5° slowly, 30° quickly, stop, and reverse. The same source slots should remain spatially stable and move smoothly; no 100px teleport to another candidate. Compare with native Unreal flares. Test a nearby emissive object separately; near-field translation may still require depth-based tracking.
+5. Open the all-Cinematic **Glint Flare** asset, check Solo/Trash icons in the top/middle/bottom of the Elements list, click Solo, click Delete and Undo, resize the left panel. Both should be clearly visible; source asset should not be changed by Solo. Report a screenshot if either icon remains blank.
+6. Keep the Post Process Volume picker behavior as a **known limitation**, not a claimed success. Select `Asset Reference` to assign Lens assets.
+7. Reset `r.Glint.DebugSources 0` and `r.Glint.DebugFlareOnly 0`. With exactly the same camera, viewport resolution, view mode and exposure, capture **3+ GPU profiles each** with `r.Glint.Enabled 0` and `1`. Compare `Glint.FindSourceCandidates`, `Glint.SelectAndTrackSources`, and total frame; do not infer sustained performance from a single frame.
+
+## Follow-up
+
+If the sun remains untracked despite compact grouping, investigate a **deterministic Sky Atmosphere directional-light anchor** gated by observed HDR brightness rather than yet more candidate-rank tuning. UE 5.8 exposes `AtmosphereLightDirection[2]` in view uniform parameters, but adding GPU access and screen-space projection needs actual engine/shader validation and sky/cloud occlusion policy. For continuous automatic effects, continue evaluating an image-based path like native Unreal flares while keeping tracked source anchors for explicitly authored optical elements. Do not silently enable new behavior without QA.

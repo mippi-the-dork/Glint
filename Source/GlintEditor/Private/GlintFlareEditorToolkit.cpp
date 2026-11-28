@@ -449,6 +449,43 @@ public:
 private:
     int32 Index=INDEX_NONE;
 };
+// Keep action icons on the same raw SImage rendering path as the working
+// drag grip. The former 24px SButton children repeatedly produced empty paint
+// despite passing layout/brush tests on the user's UE 5.8 build.
+class SGlintElementAction final : public SCompoundWidget
+{
+public:
+    SLATE_BEGIN_ARGS(SGlintElementAction) {}
+        SLATE_ARGUMENT(FName, BrushName)
+        SLATE_ARGUMENT(FText, Description)
+        SLATE_EVENT(FOnClicked, OnActivated)
+    SLATE_END_ARGS()
+    void Construct(const FArguments& Args)
+    {
+        OnActivated=Args._OnActivated;
+        SetToolTipText(Args._Description);
+        ChildSlot
+        [SNew(SBox).WidthOverride(26.f).HeightOverride(24.f)
+            [SNew(SBorder).Padding(FMargin(5.f,4.f))
+                .BorderImage(FAppStyle::GetBrush(TEXT("NoBorder")))
+                [SNew(SImage).Image(FGlintEditorStyle::Get().GetBrush(Args._BrushName))
+                    .ColorAndOpacity(FLinearColor::White)]]];
+    }
+    FReply OnMouseButtonDown(const FGeometry&, const FPointerEvent& Mouse) override
+    {
+        return Mouse.GetEffectingButton()==EKeys::LeftMouseButton
+            ? FReply::Handled().CaptureMouse(AsShared()) : FReply::Unhandled();
+    }
+    FReply OnMouseButtonUp(const FGeometry&, const FPointerEvent& Mouse) override
+    {
+        if (Mouse.GetEffectingButton()!=EKeys::LeftMouseButton || !HasMouseCapture())
+            return FReply::Unhandled();
+        return (OnActivated.IsBound() ? OnActivated.Execute() : FReply::Handled()).ReleaseMouseCapture();
+    }
+private:
+    FOnClicked OnActivated;
+};
+
 class SGlintElementDropRow final : public SCompoundWidget
 {
 public:
@@ -751,12 +788,10 @@ void FGlintFlareEditorToolkit::RebuildElementList()
             + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
               [SNew(SGlintElementGrip).Index(Index)]
             + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(1)
-              [SNew(SBox).WidthOverride(24.f).HeightOverride(24.f)
-                [SNew(SButton).ContentPadding(FMargin(0.f)).HAlign(HAlign_Center).VAlign(VAlign_Center)
-                  .ToolTipText(FText::FromString(TEXT("Solo element in preview (does not alter asset)")))
-                  .ButtonColorAndOpacity(FLinearColor::White)
-                  .OnClicked_Lambda([this,Index](){return SoloElement(Index);})
-                  .Text(FText::FromString(TEXT("S")))]]
+              [SNew(SGlintElementAction)
+                  .BrushName(Selection->SoloIndex==Index ? FName(TEXT("Glint.Solo.Solid")) : FName(TEXT("Glint.Solo.Outline")))
+                  .Description(FText::FromString(TEXT("Solo element in preview (does not alter asset)")))
+                  .OnActivated_Lambda([this,Index](){return SoloElement(Index);})]
             + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(2)
               [SNew(SCheckBox)
                 .ToolTipText(FText::FromString(TEXT("Toggle visibility in the asset and at runtime")))
@@ -769,11 +804,10 @@ void FGlintFlareEditorToolkit::RebuildElementList()
                     FLinearColor(0.1f,0.39f,0.69f):FLinearColor(0.22f,0.24f,0.29f))
                 .OnClicked_Lambda([this,Index](){return SelectElement(Index);})]
             + SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(1)
-              [SNew(SBox).WidthOverride(24.f).HeightOverride(24.f)
-                [SNew(SButton).ContentPadding(FMargin(0.f)).HAlign(HAlign_Center).VAlign(VAlign_Center)
-                  .ToolTipText(FText::FromString(TEXT("Delete this element (Undo supported)")))
-                  .OnClicked_Lambda([this,Index](){return RemoveElement(Index);})
-                  .Text(FText::FromString(TEXT("X")))]]]];
+              [SNew(SGlintElementAction)
+                  .BrushName(FName(TEXT("Glint.Icon.Trash")))
+                  .Description(FText::FromString(TEXT("Delete this element (Undo supported)")))
+                  .OnActivated_Lambda([this,Index](){return RemoveElement(Index);})]]];
     }
     if (Canvas.IsValid()) Canvas->Invalidate(EInvalidateWidgetReason::Paint);
 }
@@ -1047,19 +1081,20 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGlintOutlinerActionGlyphGeometryTest,
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FGlintOutlinerActionGlyphGeometryTest::RunTest(const FString& Parameters)
 {
-    // Layout-only smoke test. Live Slate visibility still requires manual QA.
-    const TSharedRef<SWidget> SoloWidget = SNew(SBox).WidthOverride(24.f).HeightOverride(24.f)
-        [SNew(SButton).ContentPadding(FMargin(0.f))
-            .Text(FText::FromString(TEXT("S")))];
-    const TSharedRef<SWidget> DeleteWidget = SNew(SBox).WidthOverride(24.f).HeightOverride(24.f)
-        [SNew(SButton).ContentPadding(FMargin(0.f))
-            .Text(FText::FromString(TEXT("X")))];
+    // This is the ACTUAL action glyph, not a separate SButton test fixture.
+    // Headless automation can validate its layout; painting needs manual QA.
+    const TSharedRef<SWidget> SoloWidget = SNew(SGlintElementAction)
+        .BrushName(FName(TEXT("Glint.Solo.Outline")))
+        .Description(FText::FromString(TEXT("Solo")));
+    const TSharedRef<SWidget> DeleteWidget = SNew(SGlintElementAction)
+        .BrushName(FName(TEXT("Glint.Icon.Trash")))
+        .Description(FText::FromString(TEXT("Delete")));
     SoloWidget->SlatePrepass(1.f);
     DeleteWidget->SlatePrepass(1.f);
-    TestTrue(TEXT("Solo action reserves 24 logical pixels"),
-        FMath::IsNearlyEqual(SoloWidget->GetDesiredSize().X,24.f));
-    TestTrue(TEXT("Delete action reserves 24 logical pixels"),
-        FMath::IsNearlyEqual(DeleteWidget->GetDesiredSize().X,24.f));
+    TestTrue(TEXT("Solo action reserves 26 logical pixels"),
+        FMath::IsNearlyEqual(SoloWidget->GetDesiredSize().X,26.f));
+    TestTrue(TEXT("Delete action reserves 26 logical pixels"),
+        FMath::IsNearlyEqual(DeleteWidget->GetDesiredSize().X,26.f));
     return true;
 }
 #endif

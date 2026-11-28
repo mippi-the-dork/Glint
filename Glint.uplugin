@@ -1,27 +1,27 @@
 {
-    "FileVersion": 3,
-    "Version": 30,
-    "VersionName": "0.8.7.3 - SM6 Candidate and Source Selection Shader Fix",
-    "FriendlyName": "Glint",
-    "Description": "Automatic HDR-driven lens flares and authored optical flare assets for Unreal Engine 5.8.",
-    "Category": "Rendering",
-    "CreatedBy": "Mippi the Dork",
-    "CanContainContent": true,
-    "IsBetaVersion": true,
-    "Installed": false,
-    "SupportedTargetPlatforms": [
-        "Win64"
-    ],
-    "Modules": [
-        {
-            "Name": "Glint",
-            "Type": "Runtime",
-            "LoadingPhase": "PostConfigInit"
-        },
-        {
-            "Name": "GlintEditor",
-            "Type": "Editor",
-            "LoadingPhase": "Default"
-        }
-    ]
+  "FileVersion": 3,
+  "Version": 89,
+  "VersionName": "0.8.9",
+  "FriendlyName": "Glint",
+  "Description": "Automatic HDR-driven lens flares and authored optical flare assets for Unreal Engine 5.8.",
+  "Category": "Rendering",
+  "CreatedBy": "Mippi the Dork",
+  "CanContainContent": true,
+  "IsBetaVersion": true,
+  "Installed": false,
+  "SupportedTargetPlatforms": [
+    "Win64"
+  ],
+  "Modules": [
+    {
+      "Name": "Glint",
+      "Type": "Runtime",
+      "LoadingPhase": "PostConfigInit"
+    },
+    {
+      "Name": "GlintEditor",
+      "Type": "Editor",
+      "LoadingPhase": "Default"
+    }
+  ]
 }

@@ -1,10 +1,24 @@
+# Glint 0.8.9 — HDR-Validated Sky Sun & Class Picker Fix
+
+**Development snapshot — UE 5.8.x, Win64.** Your 0.8.8 native suite passed **51/51**, but live debug screenshots still show a visible sun without a source marker, unstable numbers of cloud/terrain candidates after camera rotation, and the extra inline `GlintLensProfile` entry inside **Post Process Materials > Choose**.
+
+**0.8.9:** For the selected Sky Atmosphere directional light (index 0 by default; index 1 via `r.Glint.AtmosphereLightIndex 1`), Glint uses Unreal's existing per-view atmospheric light direction to project an **infinite-distance, unjittered sun anchor**, independently of tile candidates and region grouping. It only admits this anchor when the current HDR detection signal supports a visible bright disk; it fades a briefly obscured sun instead of immediately giving its slot to another bright region. Other emissive/reflected sources continue to use the 0.8.8 detector. `r.Glint.AtmosphereSource` defaults to 1 (HDR-validated); 0 disables; 2 is a deliberately **diagnostic-only** forced anchor. A direction without registered atmospheric illumination does not create a sun. Support for directional-light index 1 and generic lights is not implied.
+
+The `UGlintLensProfile` class now uses `HideDropdown` as well as `NotEditInlineNew` to request that Unreal's class picker **not offer inline creation**. Existing `Glint Lens Profile` assets and asset references are retained. This has not yet been verified in the actual UE 5.8 Post Process Volume picker. No global editor customization, engine changes, or asset migration.
+
+**52 native tests registered** (one new source-HDR gate test plus an updated picker reflection assertion). Static checks passing do **not** establish C++ or SM6 compilation, correct sky projection, suitable cloud occlusion, or that the native picker respects `HideDropdown`. [Dev08.09 implementation and manual acceptance](Docs/101-Dev08-09-Atmosphere-Sun-Anchor-and-Asset-Picker.md).
+
+---
+
 **Glint 0.8.7.3 SM6 startup hotfix:** Fixed a reserved HLSL variable (`centroid`) in candidate detection and restored the `[numthreads(1,1,1)]` attribute to the source-selection compute entry point. Unreal shader compilation still needs validation. See [Docs/99](Docs/99-Dev08-07-03-SM6-Candidate-Source-Selection-Fix.md). Previous Glint 0.8.7.2 API fixes and 50 registered tests are retained.
 
 **Glint 0.8.7.2 UE 5.8 API hotfix:** Replaced the deprecated no-AA projection accessor in camera reprojection; the previous user build succeeded with only this Glint C4996 warning. No flare behavior or shader changes. See [Docs/98](Docs/98-Dev08-07-02-UE58-NoAA-Projection-API.md). Run `Automation RunTests Glint` after rebuilding; 50 tests registered.
 
 ---
 
-# Glint 0.8.7 — HDR Sun Peak Protection, Camera Motion & Native Asset Picker
+# Glint
+
+> **Development snapshot 0.8.8 (UE 5.8.x):** Compact HDR-source grouping, bounded reprojection correction and direct Slate action images. Requires Unreal/SM6 compilation and manual rendering validation. See [Dev08.08 handoff](Docs/100-Dev08-08-Compact-Grouping-and-Camera-Stability.md). 0.8.7 — HDR Sun Peak Protection, Camera Motion & Native Asset Picker
 
 **UE 5.8.x / Win64, complete source plugin.** Your Glint 0.8.6.1 passed **47/47** Unreal automation tests, but manual QA showed that the sun was frequently excluded even though it was visible in the filtered HDR view, camera rotation produced jerky optical movement, action buttons remained visually blank, and the PP Weighted Blendables picker offered unwanted inline profile creation.
 

@@ -37,6 +37,8 @@ bool FGlintBlendablePickerAssetOnlyTest::RunTest(const FString& Parameters)
     const UClass* LensClass = UGlintLensProfile::StaticClass();
     TestFalse(TEXT("Lens is not eligible for inline construction in Weighted Blendables"),
         LensClass->HasAnyClassFlags(CLASS_EditInlineNew));
+    TestTrue(TEXT("Lens class is excluded from property-window class dropdowns"),
+        LensClass->HasAnyClassFlags(CLASS_HideDropDown));
     TestTrue(TEXT("Lens remains a UDataAsset"), LensClass->IsChildOf(UDataAsset::StaticClass()));
     TestTrue(TEXT("Lens implements IBlendableInterface"),
         LensClass->ImplementsInterface(UBlendableInterface::StaticClass()));

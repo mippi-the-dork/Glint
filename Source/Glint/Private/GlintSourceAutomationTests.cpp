@@ -235,7 +235,8 @@ bool FGlintStationarySourceIdentityTest::RunTest(const FString& Parameters)
         {Far},{Old},1,6.f,0.65f,0.35f,0.65f,0.0015f,false,1.f);
     TestEqual(TEXT("moving camera can reacquire distant source"), Moving.Num(),1);
     if (Moving.Num()==1)
-        TestTrue(TEXT("moving camera recovers without stationary lock"), Moving[0].UV.X>0.46f);
+        TestTrue(TEXT("moving camera does not hijack a distant highlight"),
+            FMath::IsNearlyEqual(Moving[0].UV.X, Old.UV.X, 0.00001f));
     TestEqual(TEXT("unmoving camera has zero motion factor"),
         FGlintSourceSelection::CameraMotionFactor(0.f),0.f);
     TestEqual(TEXT("two degree camera rotation permits fast source response"),
@@ -406,3 +407,43 @@ bool FGlintCameraReprojectionParityTest::RunTest(const FString& Parameters)
         FVector2f::DistSquared(FGlintSourceSelection::ReprojectSourceUV(OldUV,BehindCamera),OldUV)<1.0e-7f);
     return true;
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGlintCompactGroupingSunTest,
+    "Glint.Source.Detection.CompactGroupingSun",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FGlintCompactGroupingSunTest::RunTest(const FString& Parameters)
+{
+    constexpr float Broad = 0.125f;
+    constexpr float Independent = 0.04f;
+    const float CloudRadius = FGlintSourceSelection::CalculateCompactGroupingRadius(8.f,7.8f,Independent,Broad);
+    const float SunRadius = FGlintSourceSelection::CalculateCompactGroupingRadius(80.f,8.f,Independent,Broad);
+    TestTrue(TEXT("broad cloud retains broad grouping"), CloudRadius > 0.11f);
+    TestTrue(TEXT("sun disk has compact grouping"), SunRadius < 0.045f);
+    TestTrue(TEXT("sun 0.07 UV away is not merged into nearby cloud"), SunRadius < 0.07f && CloudRadius > 0.07f);
+    TestTrue(TEXT("camera motion cannot force a teleport snap"),
+        FGlintSourceSelection::CalculateTrackingResponse(0.35f,1.f) < 0.56f);
+    TestTrue(TEXT("stationary and moving view share the same correction limit"),
+        FMath::IsNearlyEqual(FGlintSourceSelection::CalculateTrackingResponse(0.35f,0.f),
+                             FGlintSourceSelection::CalculateTrackingResponse(0.35f,1.f)));
+    return true;
+}
+#endif
+
+#if WITH_DEV_AUTOMATION_TESTS
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGlintAtmosphereSunGateTest,
+    "Glint.Source.Detection.AtmosphereSunHDRGate",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FGlintAtmosphereSunGateTest::RunTest(const FString& Parameters)
+{
+    TestTrue(TEXT("bright compact sunlight is eligible independently of cloud candidates"),
+        FGlintSourceSelection::ShouldAcceptAtmosphereSun(40.f, 5.f, 0.875f, true));
+    TestFalse(TEXT("cloud without bright concentrated disk is not automatically the sun"),
+        FGlintSourceSelection::ShouldAcceptAtmosphereSun(6.f, 5.f, 0.875f, true));
+    TestFalse(TEXT("default atmospheric direction must not create phantom sun"),
+        FGlintSourceSelection::ShouldAcceptAtmosphereSun(40.f, 5.f, 0.875f, false));
+    TestFalse(TEXT("too dim disk cannot bypass source acquisition"),
+        FGlintSourceSelection::ShouldAcceptAtmosphereSun(0.4f, 0.02f, 0.875f, true));
+    return true;
+}
+#endif
